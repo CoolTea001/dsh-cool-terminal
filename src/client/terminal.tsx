@@ -137,10 +137,40 @@ function isDarkScheme(): boolean {
  * The shipped HTML ANSI renderer (`ui-primitives/src/ansi.ts`) notes the same
  * gap: magenta and cyan have no alias token, so they need scheme-aware
  * literals to stay legible on either background.
+ *
+ * `black` is here for the opposite reason: ANSI black must stay a *dark* color,
+ * and no token tracks that. Both this theme and the shipped HTML renderer
+ * resolve ANSI black to `--dsw-alias-label-primary` so that text colored black
+ * stays readable on the surface. That is fine for a foreground on its own, but
+ * `\x1b[30m` is almost never emitted alone: the near-universal use is a
+ * dark-text-on-color badge — pnpm's `WARN`, Vite's `WARNING` and Rollup's
+ * warnings all emit `bg yellow` + `fg black`. Resolving black to the label
+ * makes the badge's text lighter than its own background: under this theme's
+ * Matrix preset (`amber` is the neon green `#76ff03`) that produced near-white
+ * `#deeade` on `#76ff02`, a contrast ratio of about 1.06:1 — a green block with
+ * unreadable text. ANSI 0 is also the `bg black` slot (SGR 40), where a light
+ * value is wrong for the same reason.
+ *
+ * Only `black` is corrected: `white` keeps resolving to the label, because
+ * `\x1b[37m` genuinely does appear as body text and would vanish against a
+ * light surface. Dark output that wants a visible black should use the default
+ * foreground (no SGR), which is untouched by this.
  */
 const ANSI_LITERALS = {
-  light: { magenta: '#9333ea', brightMagenta: '#a855f7', cyan: '#0e7490', brightCyan: '#0891b2' },
-  dark: { magenta: '#c084fc', brightMagenta: '#d8b4fe', cyan: '#22d3ee', brightCyan: '#67e8f9' },
+  light: {
+    black: '#1b1b1c',
+    magenta: '#9333ea',
+    brightMagenta: '#a855f7',
+    cyan: '#0e7490',
+    brightCyan: '#0891b2',
+  },
+  dark: {
+    black: '#000000',
+    magenta: '#c084fc',
+    brightMagenta: '#d8b4fe',
+    cyan: '#22d3ee',
+    brightCyan: '#67e8f9',
+  },
 } as const
 
 /**
@@ -204,9 +234,10 @@ function readTheme(): ITheme {
     cursor: foreground,
     cursorAccent: background,
     selectionBackground: tint(selection, 0.35),
-    // Black and white both resolve to the primary label so ordinary output
-    // stays legible under either scheme instead of matching its own surface.
-    black: foreground,
+    // Keep ANSI black dark (see ANSI_LITERALS) so the dark-text-on-color badges
+    // every build tool emits stay readable; white still follows the label so
+    // `\x1b[37m` body text does not vanish on a light surface.
+    black: literal.black,
     red: token('--dsw-alias-state-error-primary', '#ef4444'),
     green: token('--dsw-alias-state-success-primary', '#22c55e'),
     yellow: token('--dsw-alias-state-warn-primary', '#f59e0b'),
