@@ -480,7 +480,9 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         /* measurement is best-effort */
       }
       const workspaceId = group.kind === 'workspace' ? group.key : undefined
-      const result = await openTerminal(sessionId, workspaceId, runtime.term.cols, runtime.term.rows)
+      // `runtime.id` is the console id; the Host uses it to hand back a shell
+      // this console already owns, which is what survives a page reload.
+      const result = await openTerminal(sessionId, workspaceId, runtime.term.cols, runtime.term.rows, runtime.id)
       if (result.terminalId === undefined || result.terminalId === '') {
         const detail = result.error ?? '未知错误'
         setStatus(runtime, 'failed', detail)

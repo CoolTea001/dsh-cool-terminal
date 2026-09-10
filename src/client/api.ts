@@ -66,14 +66,20 @@ export function fetchContext(sessionId?: string): Promise<ContextResult> {
  * `workspaceId` names the Workspace the terminal must start in; the Host
  * resolves its directory from its own registry. Omitting it uses the session's
  * own workdir, which is what the session-bound console does.
+ *
+ * `consoleId` is the stable browser-side console id. The Host keys live
+ * sessions by it, so a reloaded page asking for the same console gets its
+ * existing shell back (with the output it already printed) instead of a new
+ * one.
  */
 export function openTerminal(
   sessionId: string | undefined,
   workspaceId: string | undefined,
   cols: number,
   rows: number,
+  consoleId: string,
 ): Promise<OpenResult> {
-  return postJson('/open', { sessionId, workspaceId, cols, rows })
+  return postJson('/open', { sessionId, workspaceId, cols, rows, consoleId })
 }
 
 /** Deliver keystrokes exactly as typed (no implicit newline conversion). */

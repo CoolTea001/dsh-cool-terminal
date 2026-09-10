@@ -19,7 +19,7 @@ DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Traject
   - **The shell's own prompt** — `cooltea@MacBook-Air-2 deepseek-harness %`, including colors, so the current directory is always visible and updates after `cd`.
   - **Ctrl+C** — `⌃C` reaches the foreground process group, interrupting the running command just as in a system terminal.
 - No toolbar: the pane is the terminal. The shell's own prompt carries the working directory, so nothing above it duplicates that.
-- Shell state persists per console: `cd`, exported variables, and running commands all survive switching tabs, and a browser reload rejoins the same shell (recent output is replayed).
+- Shell state persists per console: `cd`, exported variables, and running commands all survive switching tabs **and a page reload**. The Host keys each shell by its console id, so a reloaded page reattaches to the shell it already owned and replays the recent output, instead of orphaning it and starting a second one.
 - Console names are persisted per browser, and every console keeps its own scrollback (5000 lines).
 - The terminal palette follows the active theme: background, foreground, cursor, selection, and the 16 ANSI colors are resolved from the `--dsw-alias-*` tokens (the same mapping the shipped HTML ANSI renderer uses), so light and dark palettes and any theme preset including `dsh-cool-theme` apply. A theme switch repaints every open console in place.
 
@@ -48,7 +48,7 @@ An out-of-tree bundle cannot generate a `ctx.remote` namespace, so HTTP over the
 
 - The terminal is a real local shell running as the DSH process user, **not** the confined one-shot shell: it is as privileged as a local shell, so treat these routes as localhost-trusted. The `subprocess` terminal primitive exposes no sandbox policy.
 - Terminal geometry is fixed when a console is created, because the platform's terminal primitive has no resize verb; the browser measures its viewport before asking for a shell.
-- Consoles are process-local and do not survive a DSH restart. A console with no browser attached for 15 minutes is closed automatically.
+- Consoles are process-local and do not survive a DSH restart. A console with no browser attached for 15 minutes is closed automatically. Reattaching after a reload restores the most recent ~256 KB of output, not necessarily the entire scrollback.
 - Commands execute in the selected Workspace's directory (or the session directory). `cd` is remembered within one console, not across consoles.
 - Deleting a Workspace's last console leaves that group empty (its `＋` button adds one back); console names live in browser storage, so they are per-browser, not per-session.
 

@@ -62,11 +62,19 @@ interface OpenBody {
   readonly workspaceId?: unknown
   readonly cols?: unknown
   readonly rows?: unknown
+  /**
+   * Stable browser-side console id. It is the reattachment key: a reloaded
+   * page asks for its own console again and gets the same live PTY back
+   * instead of a fresh shell.
+   */
+  readonly consoleId?: unknown
 }
 
 /** One live (or recently exited) PTY plus the browsers attached to it. */
 interface PtySession {
   readonly id: string
+  /** Console id this session was opened for; empty when the caller named none. */
+  readonly key: string
   readonly handle: any
   readonly cwd: string
   readonly shell: string
@@ -235,6 +243,13 @@ function sendOutput(res: any, bytes: Buffer): void {
  */
 class PtyRegistry {
   private readonly sessions = new Map<string, PtySession>()
+  /** Console id to live session id, so a reloaded page rejoins its own shell. */
+  private readonly byKey = new Map<string, string>()
+  /** In-flight allocations per console id, so concurrent opens share one shell. */
+  private readonly pending = new Map<
+    string,
+    Promise<{ session: PtySession } | { error: string; status: number }>
+  >()
   private sequence = 0
 
   constructor(private readonly ctx: any) {}
@@ -243,8 +258,83 @@ class PtyRegistry {
     return typeof id === 'string' ? this.sessions.get(id) : undefined
   }
 
-  /** Allocate a terminal, register it, and start pumping its output. */
+  /** The console id naming this request, or '' when the caller gave none. */
+  private keyOf(body: OpenBody): string {
+    return typeof body.consoleId === 'string' && body.consoleId !== '' ? body.consoleId : ''
+  }
+
+  /**
+   * The live session a console id is already bound to, if any.
+   *
+   * A session that has exited is dropped rather than reused: reattaching would
+   * hand the user a console whose shell can never come back, which is worse
+   * than a fresh prompt.
+   */
+  private liveFor(key: string): PtySession | undefined {
+    const id = this.byKey.get(key)
+    if (id === undefined) return undefined
+    const session = this.sessions.get(id)
+    if (session !== undefined && session.exited === null) return session
+    if (session !== undefined) this.forget(session)
+    else this.byKey.delete(key)
+    return undefined
+  }
+
+  /** Drop a session from both indexes and cancel its timers. */
+  private forget(session: PtySession): void {
+    this.sessions.delete(session.id)
+    if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
+    if (session.idle !== undefined) clearTimeout(session.idle)
+    if (session.reap !== undefined) clearTimeout(session.reap)
+    session.idle = undefined
+    session.reap = undefined
+  }
+
+  /**
+   * Allocate a terminal, register it, and start pumping its output.
+   *
+   * When the request names a console that already owns a live session, that
+   * session is handed back untouched. This is what makes a page reload rejoin
+   * the same shell: without it, the reload would orphan the running shell and
+   * silently start a second one, which is exactly the "terminal got reset"
+   * symptom.
+   */
   async open(body: OpenBody): Promise<{ session: PtySession } | { error: string; status: number }> {
+    const key = this.keyOf(body)
+    if (key !== '') {
+      const existing = this.liveFor(key)
+      if (existing !== undefined) {
+        this.touch(existing)
+        return { session: existing }
+      }
+      // A remount, or a reload racing the previous page's stream teardown, can
+      // issue two opens for one console; they must share one shell.
+      const inflight = this.pending.get(key)
+      if (inflight !== undefined) return inflight
+    }
+
+    const allocation = this.spawn(body, key)
+    if (key !== '') {
+      this.pending.set(key, allocation)
+      const settle = (): void => {
+        if (this.pending.get(key) === allocation) this.pending.delete(key)
+      }
+      void allocation.then(settle, settle)
+    }
+    return allocation
+  }
+
+  /** Cancel the pending reap, since a browser is about to attach again. */
+  private touch(session: PtySession): void {
+    if (session.idle === undefined) return
+    clearTimeout(session.idle)
+    session.idle = undefined
+  }
+
+  private async spawn(
+    body: OpenBody,
+    key: string,
+  ): Promise<{ session: PtySession } | { error: string; status: number }> {
     const subprocess = this.ctx.get('subprocess')
     if (subprocess === undefined || typeof subprocess.spawnTerminal !== 'function') {
       return { error: 'subprocess service unavailable', status: 503 }
@@ -279,6 +369,7 @@ class PtyRegistry {
 
     const session: PtySession = {
       id,
+      key,
       handle,
       cwd,
       shell,
@@ -293,6 +384,7 @@ class PtyRegistry {
       reap: undefined,
     }
     this.sessions.set(id, session)
+    if (key !== '') this.byKey.set(key, id)
 
     handle.output?.on?.('data', (chunk: unknown) => {
       this.broadcast(session, Buffer.from(chunk as Uint8Array))
@@ -432,6 +524,10 @@ class PtyRegistry {
     session.clients.clear()
     session.reap = setTimeout(() => {
       this.sessions.delete(session.id)
+      // Release the console id too, so reopening that console later allocates a
+      // fresh shell instead of finding this dead record.
+      if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
+      session.reap = undefined
     }, EXITED_TTL_MS)
     session.reap.unref?.()
   }
@@ -440,15 +536,18 @@ class PtyRegistry {
   async close(id: string): Promise<void> {
     const session = this.sessions.get(id)
     if (session === undefined) return
-    this.sessions.delete(id)
-    if (session.idle !== undefined) clearTimeout(session.idle)
-    if (session.reap !== undefined) clearTimeout(session.reap)
+    const live = session.exited === null
+    // Settle the session before terminating it: killing the handle resolves its
+    // `done`, and a late `finish` must not schedule work for a console that is
+    // already gone.
+    if (session.exited === null) session.exited = { exitCode: null, signal: null }
+    this.forget(session)
     this.stopKeepalive(session)
     for (const client of session.clients) {
       if (!client.writableEnded) client.end()
     }
     session.clients.clear()
-    if (session.exited === null) {
+    if (live) {
       try {
         await session.handle.terminate()
       } catch {
