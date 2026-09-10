@@ -21,6 +21,7 @@ DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Traject
 - No toolbar: the pane is the terminal. The shell's own prompt carries the working directory, so nothing above it duplicates that.
 - Shell state persists per console: `cd`, exported variables, and running commands all survive switching tabs **and a page reload**. The Host keys each shell by its console id, so a reloaded page reattaches to the shell it already owned and replays the recent output, instead of orphaning it and starting a second one.
 - Console names are persisted per browser, and every console keeps its own scrollback (5000 lines).
+- The console the tab was last showing is remembered too: a reload reopens that console — revealing its group if it was collapsed — instead of jumping back to the first group's first console.
 - The terminal palette follows the active theme: background, foreground, cursor, selection, and the 16 ANSI colors are resolved from the `--dsw-alias-*` tokens (the same mapping the shipped HTML ANSI renderer uses), so light and dark palettes and any theme preset including `dsh-cool-theme` apply. A theme switch repaints every open console in place.
 
 ## Installation

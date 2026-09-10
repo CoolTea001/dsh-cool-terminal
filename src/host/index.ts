@@ -91,6 +91,9 @@ interface PtySession {
   reap: NodeJS.Timeout | undefined
 }
 
+/** A terminal allocation: the session, or the refusal a route renders as JSON. */
+type OpenOutcome = { session: PtySession } | { error: string; status: number }
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -101,6 +104,17 @@ function sendJson(res: any, status: number, body: unknown): void {
     'cache-control': 'no-store',
   })
   res.end(JSON.stringify(body))
+}
+
+/**
+ * Answer 405 unless the request uses one of the allowed methods.
+ *
+ * @returns true when the handler may proceed.
+ */
+function methodAllowed(req: any, res: any, allowed: readonly string[]): boolean {
+  if (allowed.includes(req.method)) return true
+  sendJson(res, 405, { ok: false, error: 'method not allowed' })
+  return false
 }
 
 async function readBody(req: any): Promise<Record<string, unknown>> {
@@ -246,10 +260,7 @@ class PtyRegistry {
   /** Console id to live session id, so a reloaded page rejoins its own shell. */
   private readonly byKey = new Map<string, string>()
   /** In-flight allocations per console id, so concurrent opens share one shell. */
-  private readonly pending = new Map<
-    string,
-    Promise<{ session: PtySession } | { error: string; status: number }>
-  >()
+  private readonly pending = new Map<string, Promise<OpenOutcome>>()
   private sequence = 0
 
   constructor(private readonly ctx: any) {}
@@ -284,10 +295,34 @@ class PtyRegistry {
   private forget(session: PtySession): void {
     this.sessions.delete(session.id)
     if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
-    if (session.idle !== undefined) clearTimeout(session.idle)
-    if (session.reap !== undefined) clearTimeout(session.reap)
+    this.cancelIdle(session)
+    this.cancelReap(session)
+  }
+
+  /** Cancel the pending idle reap, because a browser is about to attach again. */
+  private cancelIdle(session: PtySession): void {
+    if (session.idle === undefined) return
+    clearTimeout(session.idle)
     session.idle = undefined
+  }
+
+  /** Cancel a scheduled record reap, because something is about to read it. */
+  private cancelReap(session: PtySession): void {
+    if (session.reap === undefined) return
+    clearTimeout(session.reap)
     session.reap = undefined
+  }
+
+  /**
+   * Keep a finished console's record answerable for a while, so a reconnecting
+   * browser still gets its replay, then drop the record and release its id.
+   */
+  private scheduleReap(session: PtySession): void {
+    this.cancelReap(session)
+    session.reap = setTimeout(() => {
+      this.forget(session)
+    }, EXITED_TTL_MS)
+    session.reap.unref?.()
   }
 
   /**
@@ -299,12 +334,12 @@ class PtyRegistry {
    * silently start a second one, which is exactly the "terminal got reset"
    * symptom.
    */
-  async open(body: OpenBody): Promise<{ session: PtySession } | { error: string; status: number }> {
+  async open(body: OpenBody): Promise<OpenOutcome> {
     const key = this.keyOf(body)
     if (key !== '') {
       const existing = this.liveFor(key)
       if (existing !== undefined) {
-        this.touch(existing)
+        this.cancelIdle(existing)
         return { session: existing }
       }
       // A remount, or a reload racing the previous page's stream teardown, can
@@ -324,17 +359,7 @@ class PtyRegistry {
     return allocation
   }
 
-  /** Cancel the pending reap, since a browser is about to attach again. */
-  private touch(session: PtySession): void {
-    if (session.idle === undefined) return
-    clearTimeout(session.idle)
-    session.idle = undefined
-  }
-
-  private async spawn(
-    body: OpenBody,
-    key: string,
-  ): Promise<{ session: PtySession } | { error: string; status: number }> {
+  private async spawn(body: OpenBody, key: string): Promise<OpenOutcome> {
     const subprocess = this.ctx.get('subprocess')
     if (subprocess === undefined || typeof subprocess.spawnTerminal !== 'function') {
       return { error: 'subprocess service unavailable', status: 503 }
@@ -439,14 +464,8 @@ class PtyRegistry {
 
   /** Attach one SSE response, replaying what the console already printed. */
   attach(session: PtySession, res: any): void {
-    if (session.reap !== undefined) {
-      clearTimeout(session.reap)
-      session.reap = undefined
-    }
-    if (session.idle !== undefined) {
-      clearTimeout(session.idle)
-      session.idle = undefined
-    }
+    this.cancelReap(session)
+    this.cancelIdle(session)
     session.clients.add(res)
     this.ensureKeepalive(session)
 
@@ -472,10 +491,7 @@ class PtyRegistry {
       // record around; arm a fresh one so a reconnecting browser still gets its
       // replay without the entry living for the rest of the process.
       this.stopKeepalive(session)
-      session.reap = setTimeout(() => {
-        this.sessions.delete(session.id)
-      }, EXITED_TTL_MS)
-      session.reap.unref?.()
+      this.scheduleReap(session)
       return
     }
 
@@ -528,10 +544,7 @@ class PtyRegistry {
     if (session.exited !== null) return
     session.exited = exit
     this.stopKeepalive(session)
-    if (session.idle !== undefined) {
-      clearTimeout(session.idle)
-      session.idle = undefined
-    }
+    this.cancelIdle(session)
     if (detail !== undefined) {
       const note = `\r\n\x1b[2m[终端结束: ${detail}]\x1b[0m\r\n`
       this.broadcast(session, Buffer.from(note, 'utf8'))
@@ -542,14 +555,10 @@ class PtyRegistry {
       client.end()
     }
     session.clients.clear()
-    session.reap = setTimeout(() => {
-      this.sessions.delete(session.id)
-      // Release the console id too, so reopening that console later allocates a
-      // fresh shell instead of finding this dead record.
-      if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
-      session.reap = undefined
-    }, EXITED_TTL_MS)
-    session.reap.unref?.()
+    // Keep the record answerable for a while (a reconnecting browser still gets
+    // its replay), then release the console id so reopening that console later
+    // allocates a fresh shell instead of finding this dead record.
+    this.scheduleReap(session)
   }
 
   /** Close one console and forget it. */
@@ -560,7 +569,7 @@ class PtyRegistry {
     // Settle the session before terminating it: killing the handle resolves its
     // `done`, and a late `finish` must not schedule work for a console that is
     // already gone.
-    if (session.exited === null) session.exited = { exitCode: null, signal: null }
+    if (live) session.exited = { exitCode: null, signal: null }
     this.forget(session)
     this.stopKeepalive(session)
     for (const client of session.clients) {
@@ -590,6 +599,8 @@ async function handleContext(ctx: any, req: any, res: any): Promise<void> {
     return
   }
 
+  if (!methodAllowed(req, res, ['GET', 'POST'])) return
+
   let body: Record<string, unknown> = {}
   if (req.method === 'POST') {
     try {
@@ -598,9 +609,6 @@ async function handleContext(ctx: any, req: any, res: any): Promise<void> {
       sendJson(res, 400, { ok: false, error: messageOf(error) })
       return
     }
-  } else if (req.method !== 'GET') {
-    sendJson(res, 405, { ok: false, error: 'method not allowed' })
-    return
   }
 
   const target = resolveWorkdir(ctx, body)
@@ -619,10 +627,7 @@ async function handleContext(ctx: any, req: any, res: any): Promise<void> {
 
 /** Allocate one terminal for a console. */
 async function handleOpen(registry: PtyRegistry, req: any, res: any): Promise<void> {
-  if (req.method !== 'POST') {
-    sendJson(res, 405, { ok: false, error: 'method not allowed' })
-    return
-  }
+  if (!methodAllowed(req, res, ['POST'])) return
   let body: OpenBody
   try {
     body = (await readBody(req)) as OpenBody
@@ -657,10 +662,7 @@ async function handleOpen(registry: PtyRegistry, req: any, res: any): Promise<vo
 
 /** Stream one console's output; the response stays open until it exits. */
 function handleStream(registry: PtyRegistry, req: any, res: any): void {
-  if (req.method !== 'GET') {
-    sendJson(res, 405, { ok: false, error: 'method not allowed' })
-    return
-  }
+  if (!methodAllowed(req, res, ['GET'])) return
   let id: string | null = null
   try {
     id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('terminalId')
@@ -677,7 +679,7 @@ function handleStream(registry: PtyRegistry, req: any, res: any): void {
 
 /** Deliver keystrokes exactly as typed, without implicit newline conversion. */
 async function handleInput(registry: PtyRegistry, req: any, res: any): Promise<void> {
-  await mutateSession(registry, req, res, async (session, body) => {
+  await mutateSession(registry, req, res, (session, body) => {
     if (typeof body.data !== 'string' || body.data === '') return { ok: true }
     registry.write(session, body.data)
     return { ok: true }
@@ -714,12 +716,12 @@ async function mutateSession(
   registry: PtyRegistry,
   req: any,
   res: any,
-  run: (session: PtySession, body: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  run: (
+    session: PtySession,
+    body: Record<string, unknown>,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>,
 ): Promise<void> {
-  if (req.method !== 'POST') {
-    sendJson(res, 405, { ok: false, error: 'method not allowed' })
-    return
-  }
+  if (!methodAllowed(req, res, ['POST'])) return
   let body: Record<string, unknown>
   try {
     body = await readBody(req)
@@ -751,14 +753,18 @@ export function apply(ctx: any): void {
     return handler(req, res)
   }
 
+  /** Register one exact route behind that shared guard. */
+  const route = (path: string, handler: (req: any, res: any) => void | Promise<void>): (() => void) =>
+    ctx.webServer.register({ kind: 'exact', path, handler: guard(handler) })
+
   ctx.effect(() => {
     const disposers = [
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.context, handler: guard((req: any, res: any) => handleContext(ctx, req, res)) }),
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.open, handler: guard((req: any, res: any) => handleOpen(registry, req, res)) }),
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.stream, handler: guard((req: any, res: any) => handleStream(registry, req, res)) }),
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.input, handler: guard((req: any, res: any) => handleInput(registry, req, res)) }),
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.signal, handler: guard((req: any, res: any) => handleSignal(registry, req, res)) }),
-      ctx.webServer.register({ kind: 'exact', path: ROUTES.close, handler: guard((req: any, res: any) => handleClose(registry, req, res)) }),
+      route(ROUTES.context, (req, res) => handleContext(ctx, req, res)),
+      route(ROUTES.open, (req, res) => handleOpen(registry, req, res)),
+      route(ROUTES.stream, (req, res) => handleStream(registry, req, res)),
+      route(ROUTES.input, (req, res) => handleInput(registry, req, res)),
+      route(ROUTES.signal, (req, res) => handleSignal(registry, req, res)),
+      route(ROUTES.close, (req, res) => handleClose(registry, req, res)),
     ]
     return () => {
       for (const dispose of disposers) dispose()

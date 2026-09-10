@@ -37,14 +37,17 @@ import {
   addTerminal,
   loadAccount,
   loadExpanded,
+  loadSelection,
   removeTerminal,
   renameTerminal,
   saveAccount,
   saveExpanded,
+  saveSelection,
   terminalsFor,
   withTerminalList,
   type TerminalAccount,
   type TerminalDef,
+  type TerminalSelection,
   type WorkspaceBridge,
 } from './terminals.js'
 
@@ -95,14 +98,9 @@ const MAX_STREAM_ERRORS = 3
 
 const h = React.createElement
 
+/** Drop trailing line breaks and spaces from a message bound for the screen. */
 function trimTail(text: string): string {
-  let value = text
-  while (value.length > 0) {
-    const code = value.charCodeAt(value.length - 1)
-    if (code === 10 || code === 13 || code === 32) value = value.slice(0, -1)
-    else break
-  }
-  return value
+  return text.replace(/[\n\r ]+$/, '')
 }
 
 /** Compare directory spellings that differ only by trailing separators. */
@@ -194,6 +192,20 @@ function tint(color: string, alpha: number): string {
 }
 
 /**
+ * The computed style of `body`, or undefined where that is unavailable.
+ *
+ * Every `--dsw-alias-*` token is declared on `body`, so this is the element both
+ * {@link readTheme} and {@link readCodeFont} read.
+ */
+function bodyStyle(): CSSStyleDeclaration | undefined {
+  try {
+    return getComputedStyle(document.body)
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Build an xterm theme from the active appearance tokens.
  *
  * Every `--dsw-alias-*` token is declared on `body` (with the dark values on
@@ -208,12 +220,8 @@ function tint(color: string, alpha: number): string {
  * the UI instead of forcing a fixed terminal palette.
  */
 function readTheme(): ITheme {
-  let style: CSSStyleDeclaration
-  try {
-    style = getComputedStyle(document.body)
-  } catch {
-    return {}
-  }
+  const style = bodyStyle()
+  if (style === undefined) return {}
   const dark = isDarkScheme()
   const literal = dark ? ANSI_LITERALS.dark : ANSI_LITERALS.light
   const token = (name: string, fallback: string): string => {
@@ -268,12 +276,8 @@ const DEFAULT_CODE_FONT = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liber
  * screen.
  */
 function readCodeFont(): string {
-  try {
-    const family = getComputedStyle(document.body).getPropertyValue('--ds-font-family-code').trim()
-    return family === '' ? DEFAULT_CODE_FONT : `${family}, ${DEFAULT_CODE_FONT}`
-  } catch {
-    return DEFAULT_CODE_FONT
-  }
+  const family = bodyStyle()?.getPropertyValue('--ds-font-family-code').trim() ?? ''
+  return family === '' ? DEFAULT_CODE_FONT : `${family}, ${DEFAULT_CODE_FONT}`
 }
 
 /** Human-readable summary of a terminal exit. */
@@ -432,11 +436,24 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     runtime.term.write(`\r\n\x1b[2m${text}\x1b[0m\r\n`)
   }
 
+  /** Drop this console's SSE stream, if it still has one. */
+  function detachStream(runtime: Runtime): void {
+    runtime.source?.close()
+    runtime.source = undefined
+  }
+
+  /** Close the PTY and dispose the xterm instance behind one console. */
+  function disposeRuntime(runtime: Runtime): void {
+    if (runtime.terminalId !== undefined) void closeTerminal(runtime.terminalId)
+    detachStream(runtime)
+    runtime.term.dispose()
+  }
+
   /** Attach (or re-attach) the SSE stream that carries a console's output. */
   function attachStream(runtime: Runtime, bump: () => void): void {
     const terminalId = runtime.terminalId
     if (terminalId === undefined) return
-    runtime.source?.close()
+    detachStream(runtime)
     const source = new EventSource(streamUrl(terminalId))
     runtime.source = source
     runtime.errors = 0
@@ -464,8 +481,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         /* keep the default label */
       }
       setStatus(runtime, 'exited', detail)
-      source.close()
-      runtime.source = undefined
+      detachStream(runtime)
       bump()
     })
     source.onerror = () => {
@@ -473,8 +489,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // forgotten answers 404 forever, so stop after a few consecutive misses.
       runtime.errors += 1
       if (runtime.errors >= MAX_STREAM_ERRORS) {
-        source.close()
-        runtime.source = undefined
+        detachStream(runtime)
         setStatus(runtime, 'lost')
         bump()
         return
@@ -535,7 +550,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     const snapshot = React.useSyncExternalStore(bridge.subscribe, bridge.getSnapshot, bridge.getSnapshot)
     const [account, setAccount] = React.useState<TerminalAccount>(() => loadAccount())
     const [sessionCwd, setSessionCwd] = React.useState('')
-    const [selection, setSelection] = React.useState<{ key: string; terminalId: string } | null>(null)
+    const [selection, setSelection] = React.useState<TerminalSelection | null>(() => loadSelection())
     const [renamingId, setRenamingId] = React.useState<string | null>(null)
     const [renameDraft, setRenameDraft] = React.useState('')
     /** Console whose row overflow menu is open, if any. */
@@ -587,13 +602,23 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       saveExpanded(expanded)
     }, [expanded])
 
-    // Keep a valid selection: prefer the Workspace the session lives in, and
-    // skip groups the user has emptied.
+    // Remember the active console: the next page load reopens this one rather
+    // than the first console of the first group.
+    React.useEffect(() => {
+      saveSelection(selection)
+    }, [selection])
+
+    // Keep a valid selection: prefer the restored console, then the Workspace
+    // the session lives in, and skip groups the user has emptied.
     React.useEffect(() => {
       const stillValid = selection !== null
         && rows.some((row) => row.key === selection.key)
         && terminalsFor(account, selection.key).some((terminal) => terminal.id === selection.terminalId)
       if (stillValid) return
+      // An empty `rows` means the Workspace list has not attached yet, not that
+      // every group disappeared: clearing here would drop the restored
+      // selection before there is anything to fall back to.
+      if (rows.length === 0) return
       const populated = rows.filter((row) => terminalsFor(account, row.key).length > 0)
       if (populated.length === 0) {
         if (selection !== null) setSelection(null)
@@ -617,6 +642,17 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       openIds.push(active.id)
       bump()
     }, [active, bump])
+
+    // An active console must be visible, so reveal its group whenever the
+    // active group changes — including the one restored on load. Keyed on the
+    // group key rather than the row object so an unrelated workspace update
+    // does not reopen a group the user has just collapsed; collapsing the
+    // active group stays possible because this runs only on change.
+    const activeGroupKey = activeGroup?.key
+    React.useEffect(() => {
+      if (activeGroupKey === undefined) return
+      setExpanded((current) => current.includes(activeGroupKey) ? current : [...current, activeGroupKey])
+    }, [activeGroupKey])
 
     // Create each opened console's xterm exactly once, and re-home it when the
     // View mounts again after the conversation shell swapped it out.
@@ -674,11 +710,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
 
       const runtime = runtimes.get(id)
       if (runtime !== undefined) {
-        const terminalId = runtime.terminalId
-        if (terminalId !== undefined) void closeTerminal(terminalId)
-        runtime.source?.close()
-        runtime.source = undefined
-        runtime.term.dispose()
+        disposeRuntime(runtime)
         runtimes.delete(id)
       }
       screens.delete(id)
@@ -705,6 +737,86 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       setRenamingId(terminal.id)
     }
 
+    /** The in-place rename field that replaces a console row's title. */
+    const renderRenameInput = (row: GroupRow, terminal: TerminalDef): React.ReactElement => h('input', {
+      key: 'rename',
+      className: 'dsh-ct-rename',
+      value: renameDraft,
+      autoFocus: true,
+      spellCheck: false,
+      onClick: (event: React.MouseEvent) => { event.stopPropagation() },
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setRenameDraft(event.target.value),
+      onKeyDown: (event: React.KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          skipBlurCommit.current = true
+          commitRename(row.key, terminal.id)
+        } else if (event.key === 'Escape') {
+          skipBlurCommit.current = true
+          setRenamingId(null)
+        }
+      },
+      onBlur: () => {
+        if (skipBlurCommit.current) {
+          skipBlurCommit.current = false
+          return
+        }
+        commitRename(row.key, terminal.id)
+      },
+    })
+
+    /**
+     * One console row's overflow menu, driven by the shipped Menu primitive: it
+     * portals out of the sidebar's scroll clip and owns outside-click, Escape,
+     * and repositioning.
+     */
+    const renderOverflowMenu = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
+      const menuItems: MenuEntry[] = [
+        { id: 'rename', label: '重命名', icon: h(IconEditOutline16, { key: 'icon' }) },
+        {
+          id: 'remove',
+          label: '删除',
+          icon: h('span', { key: 'icon', className: 'dsh-ct-menu-glyph' }, iconTrash()),
+          danger: true,
+        },
+      ]
+      return h('span', { key: 'actions', className: 'dsh-ct-term-actions' },
+        h(Menu, {
+          key: 'menu',
+          open: menuId === terminal.id,
+          items: menuItems,
+          portal: true,
+          closeOnPointerLeave: true,
+          align: 'start',
+          // Anchor the list at the trigger's bottom-RIGHT corner: the
+          // zero-width rect makes `align: start` hang the card off that
+          // corner instead of the button's left edge.
+          getAnchorRect: (): DOMRect | null => {
+            const element = menuAnchor.current
+            if (element === null) return null
+            const rect = element.getBoundingClientRect()
+            return new DOMRect(rect.right, rect.top, 0, rect.height)
+          },
+          onSelect: (id: string) => {
+            setMenuId(null)
+            if (id === 'rename') toggleRename(terminal)
+            else if (id === 'remove') removeConsole(row.key, terminal.id)
+          },
+          onClose: () => setMenuId(null),
+          anchor: h('button', {
+            type: 'button',
+            className: 'dsh-ct-icon',
+            title: '更多操作',
+            'aria-label': '更多操作',
+            onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation()
+              menuAnchor.current = event.currentTarget
+              setMenuId((current) => (current === terminal.id ? null : terminal.id))
+            },
+          }, h(IconEllipsisOutline16)),
+        }),
+      )
+    }
+
     const renderConsole = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
       const isActive = selection?.terminalId === terminal.id
       const isRenaming = renamingId === terminal.id
@@ -714,83 +826,10 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, iconTerminal()),
       ]
       if (isRenaming) {
-        children.push(h('input', {
-          key: 'rename',
-          className: 'dsh-ct-rename',
-          value: renameDraft,
-          autoFocus: true,
-          spellCheck: false,
-          onClick: (event: React.MouseEvent) => { event.stopPropagation() },
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setRenameDraft(event.target.value),
-          onKeyDown: (event: React.KeyboardEvent) => {
-            if (event.key === 'Enter') {
-              skipBlurCommit.current = true
-              commitRename(row.key, terminal.id)
-            } else if (event.key === 'Escape') {
-              skipBlurCommit.current = true
-              setRenamingId(null)
-            }
-          },
-          onBlur: () => {
-            if (skipBlurCommit.current) {
-              skipBlurCommit.current = false
-              return
-            }
-            commitRename(row.key, terminal.id)
-          },
-        }))
+        children.push(renderRenameInput(row, terminal))
       } else {
         children.push(h('span', { key: 'title', className: 'dsh-ct-term-title' }, terminal.title))
-      }
-      if (!isRenaming) {
-        // One overflow menu per row, driven by the shipped Menu primitive: it
-        // portals out of the sidebar's scroll clip and owns outside-click,
-        // Escape, and repositioning.
-        const menuItems: MenuEntry[] = [
-          { id: 'rename', label: '重命名', icon: h(IconEditOutline16, { key: 'icon' }) },
-          {
-            id: 'remove',
-            label: '删除',
-            icon: h('span', { key: 'icon', className: 'dsh-ct-menu-glyph' }, iconTrash()),
-            danger: true,
-          },
-        ]
-        children.push(h('span', { key: 'actions', className: 'dsh-ct-term-actions' },
-          h(Menu, {
-            key: 'menu',
-            open: menuId === terminal.id,
-            items: menuItems,
-            portal: true,
-            closeOnPointerLeave: true,
-            align: 'start',
-            // Anchor the list at the trigger's bottom-RIGHT corner: the
-            // zero-width rect makes `align: start` hang the card off that
-            // corner instead of the button's left edge.
-            getAnchorRect: (): DOMRect | null => {
-              const element = menuAnchor.current
-              if (element === null) return null
-              const rect = element.getBoundingClientRect()
-              return new DOMRect(rect.right, rect.top, 0, rect.height)
-            },
-            onSelect: (id: string) => {
-              setMenuId(null)
-              if (id === 'rename') toggleRename(terminal)
-              else if (id === 'remove') removeConsole(row.key, terminal.id)
-            },
-            onClose: () => setMenuId(null),
-            anchor: h('button', {
-              type: 'button',
-              className: 'dsh-ct-icon',
-              title: '更多操作',
-              'aria-label': '更多操作',
-              onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
-                event.stopPropagation()
-                menuAnchor.current = event.currentTarget
-                setMenuId((current) => (current === terminal.id ? null : terminal.id))
-              },
-            }, h(IconEllipsisOutline16)),
-          }),
-        ))
+        children.push(renderOverflowMenu(row, terminal))
       }
       const menuOpen = menuId === terminal.id
       return h('div', {
@@ -880,13 +919,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     dispose(): void {
       themeObserver?.disconnect()
       themeObserver = undefined
-      for (const runtime of runtimes.values()) {
-        const terminalId = runtime.terminalId
-        if (terminalId !== undefined) void closeTerminal(terminalId)
-        runtime.source?.close()
-        runtime.source = undefined
-        runtime.term.dispose()
-      }
+      for (const runtime of runtimes.values()) disposeRuntime(runtime)
       runtimes.clear()
       screens.clear()
       openIds.length = 0

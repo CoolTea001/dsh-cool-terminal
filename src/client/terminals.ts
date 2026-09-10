@@ -33,6 +33,15 @@ const STORAGE_KEY = 'dsh-cool-terminal.terminals.v3'
 /** Expanded group keys, in the sidebar's order of expansion. */
 const EXPANDED_KEY = 'dsh-cool-terminal.expanded.v1'
 
+/** The console the tab last showed. */
+const SELECTION_KEY = 'dsh-cool-terminal.selection.v1'
+
+/** The active console: its group key plus the console id inside it. */
+export interface TerminalSelection {
+  readonly key: string
+  readonly terminalId: string
+}
+
 /** Monotone counter; combined with the clock so ids stay unique across resets. */
 let sequence = 0
 
@@ -104,6 +113,15 @@ export function removeTerminal(list: readonly TerminalDef[], id: string): Termin
   return next.length === list.length ? [...list] : next
 }
 
+/** Parse one persisted console entry, or undefined when it is malformed. */
+function parseTerminalDef(item: unknown): TerminalDef | undefined {
+  if (item === null || typeof item !== 'object') return undefined
+  const record = item as Record<string, unknown>
+  if (typeof record.id !== 'string' || record.id === '') return undefined
+  const title = typeof record.title === 'string' && record.title !== '' ? record.title : 'Terminal'
+  return { id: record.id, title }
+}
+
 /**
  * Read the persisted account, dropping anything that does not match the shape
  * (a hand-edited or older entry must not break the tab).
@@ -120,11 +138,8 @@ export function loadAccount(): TerminalAccount {
       if (!Array.isArray(value)) continue
       const list: TerminalDef[] = []
       for (const item of value) {
-        if (item === null || typeof item !== 'object') continue
-        const record = item as Record<string, unknown>
-        if (typeof record.id !== 'string' || record.id === '') continue
-        const title = typeof record.title === 'string' && record.title !== '' ? record.title : 'Terminal'
-        list.push({ id: record.id, title })
+        const terminal = parseTerminalDef(item)
+        if (terminal !== undefined) list.push(terminal)
       }
       // An empty list is kept as-is: it records "this group holds none",
       // which must survive a reload rather than being dropped.
@@ -175,6 +190,42 @@ export function loadExpanded(): string[] {
 export function saveExpanded(keys: readonly string[]): void {
   try {
     window.localStorage.setItem(EXPANDED_KEY, JSON.stringify([...keys]))
+  } catch {
+    /* persistence is a convenience, never a precondition */
+  }
+}
+
+/**
+ * Read the persisted active console.
+ *
+ * This is what makes a reload reopen the console the user was last using
+ * instead of the first console of the first group.
+ * @returns the validated selection, or null when absent or malformed.
+ */
+export function loadSelection(): TerminalSelection | null {
+  try {
+    const raw = window.localStorage.getItem(SELECTION_KEY)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    if (typeof record.key !== 'string' || record.key === '') return null
+    if (typeof record.terminalId !== 'string' || record.terminalId === '') return null
+    return { key: record.key, terminalId: record.terminalId }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Persist the active console; an empty selection drops the entry, so a tab
+ * with nothing selected does not resurrect a stale console.
+ * @param selection - active console, or null.
+ */
+export function saveSelection(selection: TerminalSelection | null): void {
+  try {
+    if (selection === null) window.localStorage.removeItem(SELECTION_KEY)
+    else window.localStorage.setItem(SELECTION_KEY, JSON.stringify(selection))
   } catch {
     /* persistence is a convenience, never a precondition */
   }

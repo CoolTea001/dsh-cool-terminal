@@ -17,6 +17,11 @@ export interface TerminalDef {
 export type TerminalAccount = Readonly<Record<string, readonly TerminalDef[]>>;
 /** Group key of the pseudo console bound to the session's own workdir. */
 export declare const SESSION_KEY = "__session__";
+/** The active console: its group key plus the console id inside it. */
+export interface TerminalSelection {
+    readonly key: string;
+    readonly terminalId: string;
+}
 /**
  * Read a group's consoles. Groups start empty by design: nothing is seeded,
  * so an unknown group and an emptied group both answer `[]`.
@@ -81,6 +86,20 @@ export declare function loadExpanded(): string[];
  * @param keys - group keys currently expanded.
  */
 export declare function saveExpanded(keys: readonly string[]): void;
+/**
+ * Read the persisted active console.
+ *
+ * This is what makes a reload reopen the console the user was last using
+ * instead of the first console of the first group.
+ * @returns the validated selection, or null when absent or malformed.
+ */
+export declare function loadSelection(): TerminalSelection | null;
+/**
+ * Persist the active console; an empty selection drops the entry, so a tab
+ * with nothing selected does not resurrect a stale console.
+ * @param selection - active console, or null.
+ */
+export declare function saveSelection(selection: TerminalSelection | null): void;
 /** The Live Workspace row fields this UI reads. */
 export interface WorkspaceRow {
     readonly workspaceId: string;
