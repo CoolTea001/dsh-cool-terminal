@@ -121,30 +121,127 @@ function decodeBase64(value: string): Uint8Array {
 }
 
 /**
+ * True while the dark base palette is active.
+ *
+ * The theme presenter switches this attribute on `body` (ui-layout's
+ * ThemePresenter); it is the palette switch itself, not a guess derived from a
+ * resolved color, so it stays authoritative for every preset.
+ */
+function isDarkScheme(): boolean {
+  return document.body?.hasAttribute('data-ds-dark-theme') === true
+}
+
+/**
+ * ANSI colors the design system has no token for.
+ *
+ * The shipped HTML ANSI renderer (`ui-primitives/src/ansi.ts`) notes the same
+ * gap: magenta and cyan have no alias token, so they need scheme-aware
+ * literals to stay legible on either background.
+ */
+const ANSI_LITERALS = {
+  light: { magenta: '#9333ea', brightMagenta: '#a855f7', cyan: '#0e7490', brightCyan: '#0891b2' },
+  dark: { magenta: '#c084fc', brightMagenta: '#d8b4fe', cyan: '#22d3ee', brightCyan: '#67e8f9' },
+} as const
+
+/**
+ * Re-state one translucent token at a stronger alpha.
+ *
+ * Text selection tokens are subtle surface washes; used verbatim as xterm's
+ * selection they are nearly invisible. Only `rgb()`/`rgba()`/hex inputs are
+ * rewritten — anything else (a `color-mix()`, say) is passed through untouched
+ * rather than guessed at.
+ */
+function tint(color: string, alpha: number): string {
+  const rgb = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(color)
+  if (rgb !== null) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color)
+  if (hex !== null) {
+    const body = hex[1].length === 3 ? hex[1].replace(/./g, (c) => c + c) : hex[1]
+    const value = Number.parseInt(body, 16)
+    return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`
+  }
+  return color
+}
+
+/**
  * Build an xterm theme from the active appearance tokens.
  *
- * Read on creation and refreshed on every activation, so switching a theme
- * preset is picked up the next time the console is focused.
+ * Every `--dsw-alias-*` token is declared on `body` (with the dark values on
+ * `body[data-ds-dark-theme]`), and the theme presenter writes a preset's
+ * overrides as inline variables on `body` too. Reading from `body` is
+ * therefore what picks up both the active scheme and any third-party theme
+ * preset; reading from `documentElement` would only ever see the base palette.
+ *
+ * The foreground/background pair maps onto the surface and label roles, and
+ * the ANSI colors reuse the product's state tokens — the same mapping the
+ * shipped HTML ANSI renderer applies — so themed output matches the rest of
+ * the UI instead of forcing a fixed terminal palette.
  */
 function readTheme(): ITheme {
   let style: CSSStyleDeclaration
   try {
-    style = getComputedStyle(document.documentElement)
+    style = getComputedStyle(document.body)
   } catch {
     return {}
   }
+  const dark = isDarkScheme()
+  const literal = dark ? ANSI_LITERALS.dark : ANSI_LITERALS.light
   const token = (name: string, fallback: string): string => {
     const value = style.getPropertyValue(name).trim()
     return value === '' ? fallback : value
   }
-  const background = token('--dsw-alias-bg-base', '#1b1b1f')
-  const foreground = token('--dsw-alias-label-primary', '#e6e6e6')
+
+  const background = token('--dsw-alias-bg-base', dark ? '#151517' : '#ffffff')
+  const foreground = token('--dsw-alias-label-primary', dark ? '#f9fafb' : '#1b1b1c')
+  const selection = token(
+    '--dsw-alias-interactive-bg-hover-accent',
+    dark ? 'rgba(255, 255, 255, 0.24)' : 'rgba(38, 49, 72, 0.14)',
+  )
+
   return {
     background,
     foreground,
     cursor: foreground,
     cursorAccent: background,
-    selectionBackground: token('--dsw-alias-brand-primary', '#4c8dff'),
+    selectionBackground: tint(selection, 0.35),
+    // Black and white both resolve to the primary label so ordinary output
+    // stays legible under either scheme instead of matching its own surface.
+    black: foreground,
+    red: token('--dsw-alias-state-error-primary', '#ef4444'),
+    green: token('--dsw-alias-state-success-primary', '#22c55e'),
+    yellow: token('--dsw-alias-state-warn-primary', '#f59e0b'),
+    blue: token('--dsw-alias-state-business-primary', '#3b82f6'),
+    magenta: literal.magenta,
+    cyan: literal.cyan,
+    white: foreground,
+    brightBlack: token('--dsw-alias-label-tertiary', dark ? '#9ca3af' : '#6b7280'),
+    brightRed: token('--dsw-alias-state-error-secondary', '#f87171'),
+    brightGreen: token('--dsw-alias-state-success-secondary', '#4ade80'),
+    brightYellow: token('--dsw-alias-state-warn-secondary', '#fbbf24'),
+    brightBlue: token('--dsw-static-blue-400', '#60a5fa'),
+    brightMagenta: literal.brightMagenta,
+    brightCyan: literal.brightCyan,
+    brightWhite: foreground,
+  }
+}
+
+/** The fallback monospace stack, used when the theme exposes no code font. */
+const DEFAULT_CODE_FONT = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
+
+/**
+ * Resolve the code font the rest of the UI uses.
+ *
+ * Read once, when a console is created: the PTY's geometry is fixed at spawn
+ * (the platform's terminal primitive exposes no resize verb), so the font must
+ * not change afterwards or the shell's line wrapping would stop matching the
+ * screen.
+ */
+function readCodeFont(): string {
+  try {
+    const family = getComputedStyle(document.body).getPropertyValue('--ds-font-family-code').trim()
+    return family === '' ? DEFAULT_CODE_FONT : `${family}, ${DEFAULT_CODE_FONT}`
+  } catch {
+    return DEFAULT_CODE_FONT
   }
 }
 
@@ -231,15 +328,40 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
   /** Mounted screens, filled by ref callbacks. */
   const screens = new Map<string, HTMLDivElement>()
 
+  /** Repaint every live console with the tokens in force right now. */
+  function applyTheme(): void {
+    const theme = readTheme()
+    for (const runtime of runtimes.values()) runtime.term.options.theme = theme
+  }
+
+  // Every appearance change lands on `body`: the presenter toggles
+  // `data-ds-dark-theme` for the base palette and writes a preset's overrides
+  // as inline variables. Watching both keeps live consoles in step with a
+  // theme switch instead of waiting for the next activation. Only colors are
+  // reapplied — font metrics stay put, because the PTY cannot be resized.
+  let themeObserver: MutationObserver | undefined
+  function ensureThemeObserver(): void {
+    if (themeObserver !== undefined) return
+    // Installed when the first console is created, by which point the View is
+    // mounted, rather than at plugin-apply time where `body` may not exist yet.
+    if (typeof MutationObserver === 'undefined' || document.body === null) return
+    themeObserver = new MutationObserver(applyTheme)
+    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme', 'style'] })
+  }
+
   function setStatus(runtime: Runtime, status: RuntimeStatus, detail = ''): void {
     runtime.status = status
     runtime.detail = detail
   }
 
   function createRuntime(id: string): Runtime {
+    ensureThemeObserver()
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+      // The code font is fixed for this console's lifetime: the PTY's geometry
+      // is settled at spawn, so a later font change would desynchronize the
+      // shell's wrapping from the screen.
+      fontFamily: readCodeFont(),
       fontSize: 12.5,
       lineHeight: 1.3,
       scrollback: SCROLLBACK,
@@ -723,6 +845,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
   return {
     View: TerminalView,
     dispose(): void {
+      themeObserver?.disconnect()
+      themeObserver = undefined
       for (const runtime of runtimes.values()) {
         const terminalId = runtime.terminalId
         if (terminalId !== undefined) void closeTerminal(terminalId)

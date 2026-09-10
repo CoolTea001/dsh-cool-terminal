@@ -86,6 +86,10 @@ export const TERMINAL_CSS = [
   // focus ring inside the pane.
   '.dsh-ct-screen .xterm{height:100%}',
   '.dsh-ct-screen .xterm .xterm-viewport{background:transparent!important;scrollbar-width:thin}',
+  // xterm hardcodes black behind both the scrollbar track and the IME
+  // composition box; repaint them from the theme so a light palette does not
+  // get a black slab while text is being composed.
+  '.dsh-ct-screen .xterm .composition-view{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}',
 
   // The conversation shell keeps its composer seat mounted for every View. The
   // sanctioned overlay attribute (on the root below, the one ui-trajectory
