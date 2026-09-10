@@ -6,7 +6,19 @@
  * fixed dark terminal look. The sidebar mirrors the shipped sidebar's row
  * rhythm (28px headers, 26px rows, 8px radii, hover/active tokens) so the two
  * surfaces read as one product.
+ *
+ * xterm's own stylesheet is inlined too; it arrives as a build-time `define`
+ * (see tsdown.config.ts) because the platform module loader loads this package
+ * as a single JS file and would never fetch a sibling `.css` asset.
  */
+
+/**
+ * xterm's stylesheet, substituted at build time. `typeof` keeps an unbundled
+ * or misconfigured build from throwing at import time.
+ */
+declare const __DSH_CT_XTERM_CSS__: string
+
+const XTERM_CSS = typeof __DSH_CT_XTERM_CSS__ === 'string' ? __DSH_CT_XTERM_CSS__ : ''
 
 export const TERMINAL_CSS = [
   '.dsh-ct-root{display:flex;flex-direction:row;box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5}',
@@ -39,6 +51,9 @@ export const TERMINAL_CSS = [
   '.dsh-ct-term-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-ct-term-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--dsw-alias-label-tertiary)}',
   '.dsh-ct-term:hover .dsh-ct-term-icon,.dsh-ct-term-active .dsh-ct-term-icon{color:var(--dsw-alias-label-primary)}',
+  // A running console is marked while the sidebar is collapsed too, so the
+  // user can see activity without switching to it.
+  '.dsh-ct-term-live .dsh-ct-term-icon{color:var(--dsw-alias-state-success-primary)}',
   '.dsh-ct-term-actions{flex:none;display:none;align-items:center;gap:2px}',
   // The open menu keeps its trigger visible even after the pointer leaves, so
   // the hover affordance never disappears from under an open list.
@@ -56,20 +71,30 @@ export const TERMINAL_CSS = [
   '.dsh-ct-rename{flex:1;min-width:0;margin:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;line-height:inherit;outline:0;caret-color:currentColor}',
 
   // Console pane
-  '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}',
+  '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base)}',
   '.dsh-ct-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);font-size:11px}',
   '.dsh-ct-cwd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+  '.dsh-ct-status{flex:none;display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:10px}',
+  '.dsh-ct-status-live{color:var(--dsw-alias-state-success-primary);border-color:currentColor}',
+  '.dsh-ct-status-dead{color:var(--dsw-alias-label-tertiary)}',
   '.dsh-ct-btn{background:transparent;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:2px 8px;font:inherit;cursor:pointer}',
-  '.dsh-ct-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
-  '.dsh-ct-out{flex:1;min-height:0;overflow:auto;padding:10px 12px}',
-  '.dsh-ct-line{white-space:pre-wrap;word-break:break-word;margin:0}',
-  '.dsh-ct-cmd{color:var(--dsw-alias-brand-primary)}',
-  '.dsh-ct-err{color:var(--dsw-alias-state-error-primary)}',
-  '.dsh-ct-sys{color:var(--dsw-alias-label-secondary)}',
-  '.dsh-ct-row{flex:none;display:flex;align-items:center;gap:8px;border-top:1px solid var(--dsw-alias-border-l1);padding:8px 12px}',
-  '.dsh-ct-prompt{color:var(--dsw-alias-state-success-primary)}',
-  '.dsh-ct-input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:inherit;font:inherit}',
-  '.dsh-ct-input::placeholder{color:var(--dsw-alias-label-secondary)}',
+  '.dsh-ct-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+  '.dsh-ct-btn:disabled{opacity:.45;cursor:default}',
+  '.dsh-ct-btn-danger:hover:not(:disabled){color:var(--dsw-alias-state-error-primary);border-color:currentColor}',
+  // Every opened console keeps its element mounted and its xterm instance
+  // alive; only the active one is visible, so switching Views keeps scrollback
+  // and the shell's own state exactly where they were.
+  '.dsh-ct-out{position:relative;flex:1;min-height:0;overflow:hidden;padding:6px 8px 8px}',
+  '.dsh-ct-screen{position:absolute;top:6px;left:8px;right:8px;bottom:8px;display:none}',
+  '.dsh-ct-screen-active{display:block}',
+  // xterm paints its own background from the theme object; the wrapper only
+  // has to give it a definite box to measure.
+  '.dsh-ct-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center;padding:0 32px}',
+  // xterm renders a hidden textarea for IME/paste; keep it from showing a
+  // focus ring inside the pane.
+  '.dsh-ct-screen .xterm{height:100%}',
+  '.dsh-ct-screen .xterm .xterm-viewport{background:transparent!important;scrollbar-width:thin}',
+
   // The conversation shell keeps its composer seat mounted for every View. The
   // sanctioned overlay attribute (on the root below, the one ui-trajectory
   // uses) only turns that seat into a floating card over the View; this View
@@ -86,7 +111,7 @@ export const TERMINAL_CSS = [
 export function insertTerminalStyles(): () => void {
   const element = document.createElement('style')
   element.setAttribute('data-dsh-cool-terminal', '')
-  element.textContent = TERMINAL_CSS
+  element.textContent = XTERM_CSS === '' ? TERMINAL_CSS : `${XTERM_CSS}\n${TERMINAL_CSS}`
   document.head.appendChild(element)
   return () => {
     element.remove()

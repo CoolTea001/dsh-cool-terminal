@@ -44,7 +44,13 @@ export function apply(ctx: any) {
   // page-allocated lower rank, which sorts it ahead of every shipped entry.
   //
   // `order: 11` places the tab immediately after Trajectory, making it third.
-  const View = createTerminalView(bridge)
+  //
+  // The view owns real PTYs and xterm instances held outside React's tree, so
+  // unloading this plugin (reload or HMR) closes every shell instead of
+  // orphaning it.
+  const { View, dispose } = createTerminalView(bridge)
+  ctx.effect(() => () => dispose(), 'dsh-cool-terminal: terminal teardown')
+
   slots.inject('conversation.view', () =>
     slots.register({ name: 'conversation.view', id: 'cool-terminal', order: 11, label: '终端' }, View),
   )

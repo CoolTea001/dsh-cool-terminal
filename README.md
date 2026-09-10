@@ -6,7 +6,7 @@ English · [中文](./README.zh.md)
 
 ## Description
 
-DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Trajectory` in every session, so a command can be run in the session workspace without leaving the conversation.
+DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Trajectory` in every session: a real shell in the session workspace, right beside the conversation.
 
 ## Features
 
@@ -14,10 +14,13 @@ DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Traject
 - A left sidebar listing the same Workspaces as DSH's own sidebar, read live from the Client `workspaces` service: creating, renaming, reordering, or deleting a Workspace shows up here without a reload.
 - Workspace groups start collapsed and hold no console until you create one; each console runs in its group's directory. A group's expanded/collapsed state is remembered per browser, and its `＋` adds a console (revealing the group if it was collapsed).
 - A session-bound console appears when the session directory is not a registered Workspace, so the tab keeps the original behavior (session `cwd`).
-- Console names are persisted per browser, and every console keeps its own scrollback.
-- Runs one foreground command at a time through the Host `shell` seam and prints stdout, stderr, and the exit code.
+- Every console is a **real PTY** rendered by xterm.js, so it behaves like a system terminal:
+  - **Inline input** — typing happens at the shell's own prompt and the shell echoes it; the cursor sits in the output instead of in a separate input box.
+  - **The shell's own prompt** — `cooltea@MacBook-Air-2 deepseek-harness %`, including colors, so the current directory is always visible and updates after `cd`.
+  - **Ctrl+C** — `⌃C` reaches the foreground process group, and the header's `终止` button sends `SIGINT` for the same effect.
+- Shell state persists per console: `cd`, exported variables, and running commands all survive switching tabs, and a browser reload rejoins the same shell (recent output is replayed).
+- Console names are persisted per browser, and every console keeps its own scrollback (5000 lines).
 - Colors and surfaces follow the active theme tokens, so any theme preset (including `dsh-cool-theme`) applies.
-- Scrollback survives switching tabs and is bounded to 800 lines per console; `清空` clears the active one.
 
 ## Installation
 
@@ -35,16 +38,17 @@ dsh plugin --profile <your-profile> remove dsh-cool-terminal
 
 The package is one bundle with two halves:
 
-- **Host** (`lib/index.js`) registers two same-origin routes, `POST /dsh-cool-terminal/api/exec` and `POST /dsh-cool-terminal/api/context`. It validates the request, resolves the target directory, and runs the command through `ctx.shell`. A request may carry `workspaceId`; the Host resolves that Workspace's canonical directory from its own `workspaceRegistry`, so the browser never names a path directly. Without `workspaceId` the session's own workdir is used.
-- **Client** (`lib/client.js`, declared by `dsh.client`) registers the tab into the `conversation.view` slot and calls those routes with `fetch`. Its sidebar subscribes to the Client `workspaces` service through a child fiber, so the Workspace controller is an optional collaborator rather than a hard dependency. Each console row's overflow menu is the shipped `Menu` primitive from the platform-seeded `@deepseek-ai/dsh-client-ui-primitives` module (portal positioning, outside-click and Escape handling come from it).
+- **Host** (`lib/index.js`) registers same-origin routes under `/dsh-cool-terminal/api`: `context`, `open`, `stream` (SSE), `input`, `signal`, and `close`. It validates the request, resolves the target directory, and allocates one PTY per console through `ctx.subprocess.spawnTerminal`. Output is fanned out to attached browsers as base64 SSE frames; a bounded replay buffer lets a reloaded page rejoin the same shell. A request may carry `workspaceId`; the Host resolves that Workspace's canonical directory from its own `workspaceRegistry`, so the browser never names a path directly. Without `workspaceId` the session's own workdir is used. Requests that declare a foreign `Origin` are refused.
+- **Client** (`lib/client.js`, declared by `dsh.client`) registers the tab into the `conversation.view` slot and drives it with `EventSource` plus `fetch`. Each console owns an xterm.js instance held outside React's tree, so switching tabs never tears a shell down. Its sidebar subscribes to the Client `workspaces` service through a child fiber, so the Workspace controller is an optional collaborator rather than a hard dependency. Each console row's overflow menu is the shipped `Menu` primitive from the platform-seeded `@deepseek-ai/dsh-client-ui-primitives` module.
 
-An out-of-tree bundle cannot generate a `ctx.remote` namespace, so HTTP over the existing `webServer` is the supported bridge between the two halves.
+An out-of-tree bundle cannot generate a `ctx.remote` namespace, so HTTP over the existing `webServer` is the supported bridge between the two halves. `@xterm/xterm` and its CSS are inlined into the client bundle at build time, because the platform's module loader loads this package as a single JS file.
 
 ## Notes and limits
 
-- This is **not** a PTY: interactive programs (`vim`, `top`, `less`) do not work, and a command runs until it finishes or hits the shell timeout. A "console" is a named scrollback bound to a directory, not a persistent shell.
-- Commands execute on the Host as the DSH process user, in the selected Workspace's directory (or the session directory). The terminal is user-driven, so it is as privileged as a local shell — treat the route as localhost-trusted.
-- Each command starts a fresh process; `cd` does not persist between commands.
+- The terminal is a real local shell running as the DSH process user, **not** the confined one-shot shell: it is as privileged as a local shell, so treat these routes as localhost-trusted. The `subprocess` terminal primitive exposes no sandbox policy.
+- Terminal geometry is fixed when a console is created, because the platform's terminal primitive has no resize verb; the browser measures its viewport before asking for a shell.
+- Consoles are process-local and do not survive a DSH restart. A console with no browser attached for 15 minutes is closed automatically.
+- Commands execute in the selected Workspace's directory (or the session directory). `cd` is remembered within one console, not across consoles.
 - Deleting a Workspace's last console leaves that group empty (its `＋` button adds one back); console names live in browser storage, so they are per-browser, not per-session.
 
 ## Contributing

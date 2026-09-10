@@ -5,15 +5,18 @@
  * The sidebar mirrors the Host Workspace list through the Client `workspaces`
  * service, so creating, renaming, reordering, or deleting a Workspace in DSH's
  * own sidebar shows up here without a reload. Each group holds one or more
- * named consoles; the group's default console is the one every Workspace
- * starts with, and its commands run in that Workspace's directory.
+ * named consoles; every console owns a real PTY on the Host and an xterm.js
+ * instance in the browser, so its scrollback, current directory, running
+ * command, and shell state all survive switching Views.
  *
- * Scrollback and busy flags live in this closure keyed by console id, not in
- * React state, so switching Views still keeps what was printed; the closure
- * belongs to the plugin instance and dies with the plugin's fiber.
+ * Runtime objects live in this closure keyed by console id, not in React
+ * state, so unmounting the View keeps every shell alive; the closure belongs to
+ * the plugin instance and is disposed with the plugin's fiber.
  */
 
 import * as React from 'react'
+import { Terminal, type ITheme } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 import {
   IconEditOutline16,
   IconEllipsisOutline16,
@@ -22,7 +25,14 @@ import {
   Menu,
   type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { execCommand, fetchContext } from './api.js'
+import {
+  closeTerminal,
+  fetchContext,
+  openTerminal,
+  sendInput,
+  sendSignal,
+  streamUrl,
+} from './api.js'
 import {
   SESSION_KEY,
   addTerminal,
@@ -39,13 +49,6 @@ import {
   type WorkspaceBridge,
 } from './terminals.js'
 
-type LineKind = 'out' | 'cmd' | 'err' | 'sys'
-
-interface Line {
-  readonly text: string
-  readonly kind: LineKind
-}
-
 /** One entry of the left sidebar: a Workspace, or the session fallback. */
 interface GroupRow {
   readonly key: string
@@ -54,8 +57,42 @@ interface GroupRow {
   readonly kind: 'workspace' | 'session'
 }
 
+/**
+ * Lifecycle of one console's PTY.
+ *
+ * - `pending`  — the screen exists but the shell has not been asked for yet.
+ * - `starting` — `POST /open` is in flight.
+ * - `live`     — the SSE stream is attached.
+ * - `lost`     — the stream dropped and stopped reconnecting.
+ * - `exited`   — the shell reported its own exit.
+ * - `failed`   — the Host refused to allocate a terminal.
+ */
+type RuntimeStatus = 'pending' | 'starting' | 'live' | 'lost' | 'exited' | 'failed'
+
+/** Everything one console owns outside React's tree. */
+interface Runtime {
+  readonly id: string
+  readonly term: Terminal
+  readonly fit: FitAddon
+  /** Mounted screen element xterm currently lives in. */
+  element: HTMLDivElement | undefined
+  terminalId: string | undefined
+  source: EventSource | undefined
+  status: RuntimeStatus
+  detail: string
+  /** True while `POST /open` is outstanding, so it is requested exactly once. */
+  opening: boolean
+  /** Serializes keystrokes so they reach the PTY in the order they were typed. */
+  writes: Promise<void>
+  /** Consecutive SSE failures; a reconnecting EventSource resets it. */
+  errors: number
+}
+
 /** Keep the scrollback bounded; this is a convenience view, not a log store. */
-const MAX_LINES = 800
+const SCROLLBACK = 5000
+
+/** Stop retrying a severed stream after this many consecutive failures. */
+const MAX_STREAM_ERRORS = 3
 
 const h = React.createElement
 
@@ -74,6 +111,51 @@ function normalizePath(value: string): string {
   if (value === '') return ''
   const trimmed = value.replace(/[\\/]+$/, '')
   return trimmed === '' ? value : trimmed
+}
+
+/** Decode one base64 SSE frame into bytes xterm can write directly. */
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
+/**
+ * Build an xterm theme from the active appearance tokens.
+ *
+ * Read on creation and refreshed on every activation, so switching a theme
+ * preset is picked up the next time the console is focused.
+ */
+function readTheme(): ITheme {
+  let style: CSSStyleDeclaration
+  try {
+    style = getComputedStyle(document.documentElement)
+  } catch {
+    return {}
+  }
+  const token = (name: string, fallback: string): string => {
+    const value = style.getPropertyValue(name).trim()
+    return value === '' ? fallback : value
+  }
+  const background = token('--dsw-alias-bg-base', '#1b1b1f')
+  const foreground = token('--dsw-alias-label-primary', '#e6e6e6')
+  return {
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: token('--dsw-alias-brand-primary', '#4c8dff'),
+  }
+}
+
+/** Human-readable summary of a terminal exit. */
+function describeExit(payload: { exitCode?: number | null; signal?: string | null }): string {
+  if (typeof payload.signal === 'string' && payload.signal !== '') return `信号 ${payload.signal}`
+  if (typeof payload.exitCode === 'number') {
+    return payload.exitCode === 0 ? '已结束' : `退出码 ${payload.exitCode}`
+  }
+  return '已结束'
 }
 
 /** Shared geometry for the inline action icons. */
@@ -117,7 +199,8 @@ function iconTrash(): React.ReactElement {
 }
 
 /** Add a console. */
-function iconPlus(): React.ReactElement {  return iconFrame(h('path', {
+function iconPlus(): React.ReactElement {
+  return iconFrame(h('path', {
     key: 'plus',
     fill: 'none',
     stroke: 'currentColor',
@@ -128,21 +211,182 @@ function iconPlus(): React.ReactElement {  return iconFrame(h('path', {
   }))
 }
 
-/**
- * Build the View component.
- * @param bridge - late-bound Workspace list source.
- * @returns the Conversation View component.
- */
-export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType<any> {
-  const lines = new Map<string, Line[]>()
-  const busy = new Set<string>()
-  const opened = new Set<string>()
+/** The result of {@link createTerminalView}. */
+export interface TerminalViewHandle {
+  /** The Conversation View component to register into `conversation.view`. */
+  readonly View: React.ComponentType<any>
+  /** Close every PTY and dispose every xterm instance. */
+  dispose(): void
+}
 
-  function pushLine(id: string, text: string, kind: LineKind = 'out'): void {
-    const list = lines.get(id) ?? []
-    list.push({ text, kind })
-    if (list.length > MAX_LINES) list.splice(0, list.length - MAX_LINES)
-    lines.set(id, list)
+/**
+ * Build the View component and its teardown.
+ * @param bridge - late-bound Workspace list source.
+ * @returns the Conversation View component plus a plugin-lifetime disposer.
+ */
+export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle {
+  /** Live consoles; survives this View being unmounted. */
+  const runtimes = new Map<string, Runtime>()
+  /** Console ids whose screen element is mounted, in first-activation order. */
+  const openIds: string[] = []
+  /** Mounted screens, filled by ref callbacks. */
+  const screens = new Map<string, HTMLDivElement>()
+
+  function setStatus(runtime: Runtime, status: RuntimeStatus, detail = ''): void {
+    runtime.status = status
+    runtime.detail = detail
+  }
+
+  function createRuntime(id: string): Runtime {
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+      fontSize: 12.5,
+      lineHeight: 1.3,
+      scrollback: SCROLLBACK,
+      macOptionIsMeta: true,
+      theme: readTheme(),
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    const runtime: Runtime = {
+      id,
+      term,
+      fit,
+      element: undefined,
+      terminalId: undefined,
+      source: undefined,
+      status: 'pending',
+      detail: '',
+      opening: false,
+      writes: Promise.resolve(),
+      errors: 0,
+    }
+    // Every keystroke, including control characters such as Ctrl+C, goes to the
+    // PTY verbatim; the shell echoes it, which is what puts the cursor inline
+    // after the prompt instead of in a separate input row.
+    term.onData((data: string) => {
+      const terminalId = runtime.terminalId
+      if (terminalId === undefined) return
+      runtime.writes = runtime.writes
+        .then(() => sendInput(terminalId, data))
+        .then(() => undefined)
+        .catch(() => undefined)
+    })
+    return runtime
+  }
+
+  function writeBanner(runtime: Runtime, text: string): void {
+    runtime.term.write(`\r\n\x1b[2m${text}\x1b[0m\r\n`)
+  }
+
+  /** Attach (or re-attach) the SSE stream that carries a console's output. */
+  function attachStream(runtime: Runtime, bump: () => void): void {
+    const terminalId = runtime.terminalId
+    if (terminalId === undefined) return
+    runtime.source?.close()
+    const source = new EventSource(streamUrl(terminalId))
+    runtime.source = source
+    runtime.errors = 0
+
+    source.onmessage = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(event.data) as { d?: unknown }
+        if (typeof payload.d === 'string') runtime.term.write(decodeBase64(payload.d))
+      } catch {
+        /* a malformed frame is not worth breaking the stream over */
+      }
+    }
+    source.onopen = () => {
+      runtime.errors = 0
+      if (runtime.status === 'lost') {
+        setStatus(runtime, 'live')
+        bump()
+      }
+    }
+    source.addEventListener('exit', (event: Event) => {
+      let detail = '已结束'
+      try {
+        detail = describeExit(JSON.parse((event as MessageEvent).data) as { exitCode?: number | null; signal?: string | null })
+      } catch {
+        /* keep the default label */
+      }
+      setStatus(runtime, 'exited', detail)
+      source.close()
+      runtime.source = undefined
+      bump()
+    })
+    source.onerror = () => {
+      // `EventSource` reconnects on its own. A console the Host has already
+      // forgotten answers 404 forever, so stop after a few consecutive misses.
+      runtime.errors += 1
+      if (runtime.errors >= MAX_STREAM_ERRORS) {
+        source.close()
+        runtime.source = undefined
+        setStatus(runtime, 'lost')
+        bump()
+        return
+      }
+      if (runtime.status === 'live') {
+        setStatus(runtime, 'lost')
+        bump()
+      }
+    }
+  }
+
+  /**
+   * Size the screen and ask the Host for a PTY, exactly once per console.
+   *
+   * The subprocess seam exposes no resize verb, so this measurement is the
+   * size the shell lives at for its whole lifetime.
+   */
+  async function ensureStarted(
+    runtime: Runtime,
+    group: GroupRow,
+    sessionId: string | undefined,
+    bump: () => void,
+  ): Promise<void> {
+    if (runtime.terminalId !== undefined || runtime.opening) return
+    runtime.opening = true
+    setStatus(runtime, 'starting')
+    bump()
+    try {
+      // A hidden or zero-sized screen cannot be measured; fit() then keeps the
+      // current geometry rather than collapsing the terminal.
+      try {
+        runtime.fit.fit()
+      } catch {
+        /* measurement is best-effort */
+      }
+      const workspaceId = group.kind === 'workspace' ? group.key : undefined
+      const result = await openTerminal(sessionId, workspaceId, runtime.term.cols, runtime.term.rows)
+      if (result.terminalId === undefined || result.terminalId === '') {
+        const detail = result.error ?? '未知错误'
+        setStatus(runtime, 'failed', detail)
+        writeBanner(runtime, `无法启动终端: ${trimTail(detail)}`)
+        bump()
+        return
+      }
+      runtime.terminalId = result.terminalId
+      setStatus(runtime, 'live')
+      attachStream(runtime, bump)
+      bump()
+    } finally {
+      runtime.opening = false
+    }
+  }
+
+  /** The status pill's label and tone for one console. */
+  function statusOf(runtime: Runtime | undefined): { text: string; live: boolean } {
+    if (runtime === undefined) return { text: '未启动', live: false }
+    switch (runtime.status) {
+      case 'pending': return { text: '准备中', live: false }
+      case 'starting': return { text: '启动中', live: false }
+      case 'live': return { text: '运行中', live: true }
+      case 'lost': return { text: '已断开', live: false }
+      case 'exited': return { text: runtime.detail === '' ? '已结束' : runtime.detail, live: false }
+      case 'failed': return { text: '启动失败', live: false }
+    }
   }
 
   function TerminalView(props: any): React.ReactElement {
@@ -151,7 +395,6 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
     const [account, setAccount] = React.useState<TerminalAccount>(() => loadAccount())
     const [sessionCwd, setSessionCwd] = React.useState('')
     const [selection, setSelection] = React.useState<{ key: string; terminalId: string } | null>(null)
-    const [draft, setDraft] = React.useState('')
     const [renamingId, setRenamingId] = React.useState<string | null>(null)
     const [renameDraft, setRenameDraft] = React.useState('')
     /** Console whose row overflow menu is open, if any. */
@@ -160,8 +403,8 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
     const menuAnchor = React.useRef<HTMLButtonElement | null>(null)
     /** Groups the user expanded; anything absent is collapsed. */
     const [expanded, setExpanded] = React.useState<readonly string[]>(() => loadExpanded())
-    const [, setVersion] = React.useState(0)
-    const bump = (): void => setVersion((value) => value + 1)
+    const [version, setVersion] = React.useState(0)
+    const bump = React.useCallback((): void => setVersion((value) => value + 1), [])
     /** Escape unmounts the rename input, and the unmount fires blur; this
      *  keeps that blur from committing the abandoned draft. */
     const skipBlurCommit = React.useRef(false)
@@ -226,49 +469,51 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
       ? undefined
       : activeList.find((terminal) => terminal.id === selection.terminalId)
 
-    // Open each console exactly once: its header goes into its own scrollback.
+    // Mark a console as opened the first time it becomes active. Its screen
+    // then stays mounted even after the user switches away.
     React.useEffect(() => {
-      if (active === undefined || activeGroup === undefined || opened.has(active.id)) return
-      opened.add(active.id)
-      pushLine(active.id, `终端 · ${active.title}`, 'sys')
-      pushLine(active.id, `工作目录 ${activeGroup.path}`, 'sys')
+      if (active === undefined || openIds.includes(active.id)) return
+      openIds.push(active.id)
       bump()
-    }, [active, activeGroup])
+    }, [active, bump])
+
+    // Create each opened console's xterm exactly once, and re-home it when the
+    // View mounts again after the conversation shell swapped it out.
+    React.useEffect(() => {
+      for (const id of [...openIds]) {
+        const element = screens.get(id)
+        if (element === undefined) continue
+        const runtime = runtimes.get(id)
+        if (runtime === undefined) {
+          const created = createRuntime(id)
+          created.term.open(element)
+          created.element = element
+          runtimes.set(id, created)
+          continue
+        }
+        if (runtime.element === element) continue
+        const own = runtime.term.element
+        if (own !== undefined && own !== null) element.appendChild(own)
+        runtime.element = element
+        runtime.term.refresh(0, Math.max(0, runtime.term.rows - 1))
+      }
+    })
+
+    // Wire the active console: refresh its theme, size it, and start its shell
+    // the first time it is shown.
+    React.useEffect(() => {
+      if (active === undefined || activeGroup === undefined) return
+      const runtime = runtimes.get(active.id)
+      if (runtime === undefined || runtime.element === undefined) return
+      runtime.term.options.theme = readTheme()
+      runtime.term.focus()
+      void ensureStarted(runtime, activeGroup, sessionId, bump)
+      // `version` is what re-runs this after the "mark opened" effect above
+      // bumps it: the runtime this effect needs does not exist until the next
+      // commit, so the first pass returns early and this pass starts the shell.
+    }, [active, activeGroup, sessionId, version, bump])
 
     const select = (key: string, terminalId: string): void => setSelection({ key, terminalId })
-
-    const run = (): void => {
-      if (active === undefined || activeGroup === undefined) return
-      const command = draft
-      if (command.trim() === '' || busy.has(active.id)) return
-      const terminalId = active.id
-      const workspaceId = activeGroup.kind === 'workspace' ? activeGroup.key : undefined
-      setDraft('')
-      busy.add(terminalId)
-      pushLine(terminalId, command, 'cmd')
-      bump()
-      void execCommand(command, sessionId, workspaceId)
-        .then((result) => {
-          if (result.ok) {
-            const out = result.stdout ? trimTail(result.stdout) : ''
-            const err = result.stderr ? trimTail(result.stderr) : ''
-            if (out !== '') pushLine(terminalId, out, 'out')
-            if (err !== '') pushLine(terminalId, err, 'err')
-            if (out === '' && err === '') pushLine(terminalId, '(无输出)', 'sys')
-            if (result.timedOut === true) pushLine(terminalId, '命令超时已被终止', 'err')
-            else if (typeof result.exitCode === 'number' && result.exitCode !== 0) pushLine(terminalId, `退出码 ${result.exitCode}`, 'sys')
-          } else {
-            pushLine(terminalId, `错误: ${result.error ?? '未知错误'}`, 'err')
-          }
-        })
-        .catch((error: unknown) => {
-          pushLine(terminalId, `调用失败: ${error instanceof Error ? error.message : String(error)}`, 'err')
-        })
-        .then(() => {
-          busy.delete(terminalId)
-          bump()
-        })
-    }
 
     const addConsole = (key: string): void => {
       const list = addTerminal(terminalsFor(account, key), key)
@@ -285,9 +530,19 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
       const next = removeTerminal(current, id)
       if (next.length === current.length) return
       setAccount(withTerminalList(account, key, next))
-      lines.delete(id)
-      busy.delete(id)
-      opened.delete(id)
+
+      const runtime = runtimes.get(id)
+      if (runtime !== undefined) {
+        const terminalId = runtime.terminalId
+        if (terminalId !== undefined) void closeTerminal(terminalId)
+        runtime.source?.close()
+        runtime.source = undefined
+        runtime.term.dispose()
+        runtimes.delete(id)
+      }
+      screens.delete(id)
+      const openIndex = openIds.indexOf(id)
+      if (openIndex >= 0) openIds.splice(openIndex, 1)
       // A group may end up with none; the selection effect picks the next
       // populated group (or clears the selection when there is none).
       if (selection?.terminalId === id) setSelection(null)
@@ -312,6 +567,8 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
     const renderConsole = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
       const isActive = selection?.terminalId === terminal.id
       const isRenaming = renamingId === terminal.id
+      const runtime = runtimes.get(terminal.id)
+      const live = runtime?.status === 'live'
       const children: React.ReactNode[] = [
         h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, iconTerminal()),
       ]
@@ -397,7 +654,7 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
       const menuOpen = menuId === terminal.id
       return h('div', {
         key: terminal.id,
-        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}`,
+        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}${live ? ' dsh-ct-term-live' : ''}`,
         title: row.path,
         onClick: () => {
           if (isRenaming) return
@@ -445,9 +702,19 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
           : rows.map((row) => renderGroup(row))),
     )
 
-    const activeLines = active === undefined ? [] : (lines.get(active.id) ?? [])
-    const rendered = activeLines.map((line, index) =>
-      h('div', { key: `line-${index}`, className: `dsh-ct-line dsh-ct-${line.kind}` }, line.text))
+    const activeRuntime = active === undefined ? undefined : runtimes.get(active.id)
+    const status = statusOf(activeRuntime)
+
+    // Every opened console keeps its screen mounted; only the active one is
+    // visible, so switching consoles never tears down a live shell.
+    const screenNodes = openIds.map((id) => h('div', {
+      key: id,
+      className: `dsh-ct-screen${active !== undefined && active.id === id ? ' dsh-ct-screen-active' : ''}`,
+      ref: (element: HTMLDivElement | null): void => {
+        if (element === null) screens.delete(id)
+        else screens.set(id, element)
+      },
+    }))
 
     const main = h('section', { key: 'main', className: 'dsh-ct-main' },
       h('div', { key: 'head', className: 'dsh-ct-head' },
@@ -455,47 +722,38 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
           active === undefined || activeGroup === undefined
             ? '终端'
             : `${activeGroup.title} · ${active.title} · ${activeGroup.path}`),
-        active === undefined
-          ? null
-          : h('button', {
-            key: 'clear',
-            type: 'button',
-            className: 'dsh-ct-btn',
-            onClick: () => {
-              lines.set(active.id, [])
-              bump()
-            },
-          }, '清空'),
+        h('span', {
+          key: 'status',
+          className: `dsh-ct-status${status.live ? ' dsh-ct-status-live' : ' dsh-ct-status-dead'}`,
+        }, status.text),
+        h('button', {
+          key: 'kill',
+          type: 'button',
+          className: 'dsh-ct-btn dsh-ct-btn-danger',
+          disabled: activeRuntime?.terminalId === undefined || activeRuntime.status === 'exited',
+          title: '向当前前台进程发送 Ctrl+C (SIGINT)',
+          onClick: () => {
+            if (activeRuntime?.terminalId === undefined || activeRuntime.status === 'exited') return
+            void sendSignal(activeRuntime.terminalId, 'SIGINT')
+            activeRuntime.term.focus()
+          },
+        }, '终止'),
+        h('button', {
+          key: 'clear',
+          type: 'button',
+          className: 'dsh-ct-btn',
+          disabled: activeRuntime === undefined,
+          onClick: () => {
+            activeRuntime?.term.clear()
+            activeRuntime?.term.focus()
+          },
+        }, '清空'),
       ),
-      h('div', {
-        key: 'out',
-        className: 'dsh-ct-out',
-        ref: (element: HTMLDivElement | null): void => {
-          if (element) element.scrollTop = element.scrollHeight
-        },
-      }, rendered),
-      h('form', {
-        key: 'row',
-        className: 'dsh-ct-row',
-        onSubmit: (event: React.FormEvent) => {
-          event.preventDefault()
-          run()
-        },
-      },
-      h('span', { key: 'prompt', className: 'dsh-ct-prompt' }, '❯'),
-      h('input', {
-        key: 'input',
-        className: 'dsh-ct-input',
-        value: draft,
-        spellCheck: false,
-        autoComplete: 'off',
-        disabled: active === undefined,
-        placeholder: active === undefined
-          ? '请先新建终端'
-          : busy.has(active.id) ? '运行中…' : '输入命令并回车',
-        onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
-      }),
-      ),
+      h('div', { key: 'out', className: 'dsh-ct-out' },
+        screenNodes,
+        openIds.length === 0
+          ? h('div', { key: 'hint', className: 'dsh-ct-hint' }, '请在左侧工作区点击 ＋ 新建一个终端')
+          : null),
     )
 
     return h('div', {
@@ -507,5 +765,19 @@ export function createTerminalView(bridge: WorkspaceBridge): React.ComponentType
     }, sidebar, main)
   }
 
-  return TerminalView
+  return {
+    View: TerminalView,
+    dispose(): void {
+      for (const runtime of runtimes.values()) {
+        const terminalId = runtime.terminalId
+        if (terminalId !== undefined) void closeTerminal(terminalId)
+        runtime.source?.close()
+        runtime.source = undefined
+        runtime.term.dispose()
+      }
+      runtimes.clear()
+      screens.clear()
+      openIds.length = 0
+    },
+  }
 }
