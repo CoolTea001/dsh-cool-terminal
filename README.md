@@ -17,7 +17,8 @@ DeepSeek Harness plugin that adds a **Terminal** tab next to `Chat` and `Traject
 - Every console is a **real PTY** rendered by xterm.js, so it behaves like a system terminal:
   - **Inline input** — typing happens at the shell's own prompt and the shell echoes it; the cursor sits in the output instead of in a separate input box.
   - **The shell's own prompt** — `cooltea@MacBook-Air-2 deepseek-harness %`, including colors, so the current directory is always visible and updates after `cd`.
-  - **Ctrl+C** — `⌃C` reaches the foreground process group, and the header's `终止` button sends `SIGINT` for the same effect.
+  - **Ctrl+C** — `⌃C` reaches the foreground process group, interrupting the running command just as in a system terminal.
+- No toolbar: the pane is the terminal. The shell's own prompt carries the working directory, so nothing above it duplicates that.
 - Shell state persists per console: `cd`, exported variables, and running commands all survive switching tabs, and a browser reload rejoins the same shell (recent output is replayed).
 - Console names are persisted per browser, and every console keeps its own scrollback (5000 lines).
 - Colors and surfaces follow the active theme tokens, so any theme preset (including `dsh-cool-theme`) applies.

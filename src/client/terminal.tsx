@@ -30,7 +30,6 @@ import {
   fetchContext,
   openTerminal,
   sendInput,
-  sendSignal,
   streamUrl,
 } from './api.js'
 import {
@@ -376,19 +375,6 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     }
   }
 
-  /** The status pill's label and tone for one console. */
-  function statusOf(runtime: Runtime | undefined): { text: string; live: boolean } {
-    if (runtime === undefined) return { text: '未启动', live: false }
-    switch (runtime.status) {
-      case 'pending': return { text: '准备中', live: false }
-      case 'starting': return { text: '启动中', live: false }
-      case 'live': return { text: '运行中', live: true }
-      case 'lost': return { text: '已断开', live: false }
-      case 'exited': return { text: runtime.detail === '' ? '已结束' : runtime.detail, live: false }
-      case 'failed': return { text: '启动失败', live: false }
-    }
-  }
-
   function TerminalView(props: any): React.ReactElement {
     const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : undefined
     const snapshot = React.useSyncExternalStore(bridge.subscribe, bridge.getSnapshot, bridge.getSnapshot)
@@ -702,9 +688,6 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           : rows.map((row) => renderGroup(row))),
     )
 
-    const activeRuntime = active === undefined ? undefined : runtimes.get(active.id)
-    const status = statusOf(activeRuntime)
-
     // Every opened console keeps its screen mounted; only the active one is
     // visible, so switching consoles never tears down a live shell.
     const screenNodes = openIds.map((id) => h('div', {
@@ -716,39 +699,11 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       },
     }))
 
+    // No toolbar: the shell prints its own prompt (which already carries the
+    // directory) and Ctrl+C interrupts the foreground command, exactly as in a
+    // system terminal. A console that fails to start reports it in its own
+    // scrollback, so there is no chrome to keep the error visible.
     const main = h('section', { key: 'main', className: 'dsh-ct-main' },
-      h('div', { key: 'head', className: 'dsh-ct-head' },
-        h('span', { key: 'cwd', className: 'dsh-ct-cwd' },
-          active === undefined || activeGroup === undefined
-            ? '终端'
-            : `${activeGroup.title} · ${active.title} · ${activeGroup.path}`),
-        h('span', {
-          key: 'status',
-          className: `dsh-ct-status${status.live ? ' dsh-ct-status-live' : ' dsh-ct-status-dead'}`,
-        }, status.text),
-        h('button', {
-          key: 'kill',
-          type: 'button',
-          className: 'dsh-ct-btn dsh-ct-btn-danger',
-          disabled: activeRuntime?.terminalId === undefined || activeRuntime.status === 'exited',
-          title: '向当前前台进程发送 Ctrl+C (SIGINT)',
-          onClick: () => {
-            if (activeRuntime?.terminalId === undefined || activeRuntime.status === 'exited') return
-            void sendSignal(activeRuntime.terminalId, 'SIGINT')
-            activeRuntime.term.focus()
-          },
-        }, '终止'),
-        h('button', {
-          key: 'clear',
-          type: 'button',
-          className: 'dsh-ct-btn',
-          disabled: activeRuntime === undefined,
-          onClick: () => {
-            activeRuntime?.term.clear()
-            activeRuntime?.term.focus()
-          },
-        }, '清空'),
-      ),
       h('div', { key: 'out', className: 'dsh-ct-out' },
         screenNodes,
         openIds.length === 0

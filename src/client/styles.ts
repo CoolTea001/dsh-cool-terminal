@@ -70,17 +70,9 @@ export const TERMINAL_CSS = [
   // text reveal that the label became editable.
   '.dsh-ct-rename{flex:1;min-width:0;margin:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;line-height:inherit;outline:0;caret-color:currentColor}',
 
-  // Console pane
+  // Console pane. There is no toolbar: the pane is the terminal, and the shell
+  // prints its own prompt (which already carries the directory).
   '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base)}',
-  '.dsh-ct-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);font-size:11px}',
-  '.dsh-ct-cwd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-  '.dsh-ct-status{flex:none;display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:10px}',
-  '.dsh-ct-status-live{color:var(--dsw-alias-state-success-primary);border-color:currentColor}',
-  '.dsh-ct-status-dead{color:var(--dsw-alias-label-tertiary)}',
-  '.dsh-ct-btn{background:transparent;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:2px 8px;font:inherit;cursor:pointer}',
-  '.dsh-ct-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
-  '.dsh-ct-btn:disabled{opacity:.45;cursor:default}',
-  '.dsh-ct-btn-danger:hover:not(:disabled){color:var(--dsw-alias-state-error-primary);border-color:currentColor}',
   // Every opened console keeps its element mounted and its xterm instance
   // alive; only the active one is visible, so switching Views keeps scrollback
   // and the shell's own state exactly where they were.
