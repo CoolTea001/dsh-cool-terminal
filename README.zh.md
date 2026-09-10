@@ -36,6 +36,7 @@ dsh plugin --profile <your-profile> remove dsh-cool-terminal
 - 终端是进程内状态，DSH 重启后不会保留；长时间没有浏览器连接的终端会在 15 分钟后自动关闭。
 - 命令在所选工作区目录（或会话目录）执行，`cd` 会在同一个终端内保留，不跨终端。
 - 命令历史保存在 `~/.dsh-cool-terminal/history`，按终端 id 命名。删除终端不会删除对应文件，想一次清空所有终端历史就删掉这个目录。
+- PTY provider 会把每个 shell 的终端名强制成 `dumb`，而该 terminfo 条目没有光标移动和擦除能力。zsh 终端的启动 shim 会重新导出一个真实条目（优先 `xterm-256color`，否则 `xterm`），让行编辑、颜色和 `clear` 表现得像正常 xterm；如果你自己的 `.zshrc` 设置了 `TERM`，则以你的为准。
 
 ## 参与贡献
 

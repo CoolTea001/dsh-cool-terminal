@@ -79,6 +79,9 @@ const ZSH_SHIM_LINKS = ['.zshenv', '.zprofile', '.zlogin', '.zlogout'] as const
 /** Fallback history sizes for a shell whose own startup files set none. */
 const DEFAULT_HISTSIZE = 10_000
 
+/** Real terminfo entries to prefer over the forced `dumb`, best first. */
+const TERMINFO_CANDIDATES = ['xterm-256color', 'xterm'] as const
+
 /** bash appends the pending line to `HISTFILE` on demand; see {@link historyEnv}. */
 const BASH_HISTORY_FLUSH = 'history -a'
 
@@ -300,6 +303,10 @@ function zshQuote(value: string): string {
  * appended as it is entered, and the file is already current when the shell
  * dies.
  *
+ * The shim also repairs `TERM` (see {@link resolveTerminfoName}). It runs after
+ * the user's own configuration, so a `.zshrc` that sets `TERM` itself still
+ * wins; only a shell left on the forced `dumb` is re-pointed.
+ *
  * @param userZdotdir - the real `$ZDOTDIR` (or home) the shim stands in for.
  * @returns the file body.
  */
@@ -310,6 +317,13 @@ function zshShimRc(userZdotdir: string): string {
     `CT_USER_ZDOTDIR=${zshQuote(userZdotdir)}`,
     'if [[ -r ${CT_USER_ZDOTDIR}/.zshrc ]]; then',
     '  source "${CT_USER_ZDOTDIR}/.zshrc"',
+    'fi',
+    '# The PTY provider forces the terminal name to `dumb`, whose terminfo entry',
+    '# cannot address or erase cells: zsh then repaints a line by overwriting it',
+    '# with spaces, which blanks the prompt. zle reads TERM only now, on first',
+    '# use, so a real entry restores editing. Left alone if the user set TERM.',
+    'if [[ ${TERM} == dumb && -n ${CT_TERM-} ]]; then',
+    '  export TERM=${CT_TERM}',
     'fi',
     'if [[ -n ${CT_HISTFILE-} ]]; then',
     '  HISTFILE=${CT_HISTFILE}',
@@ -377,6 +391,52 @@ function ensureZshShim(userZdotdir: string): string | undefined {
 }
 
 /**
+ * Directories ncurses searches for a compiled terminfo entry.
+ *
+ * `TERMINFO` names one directory, `TERMINFO_DIRS` is a colon list where an empty
+ * element means "the system default", and the rest are the conventional
+ * fallbacks. Only non-empty entries matter, so the empty ones are dropped.
+ */
+function terminfoDirs(): string[] {
+  const configured = (process.env.TERMINFO_DIRS ?? '').split(':')
+  const dirs = [
+    process.env.TERMINFO,
+    ...configured,
+    '/etc/terminfo',
+    '/usr/share/terminfo',
+    '/usr/lib/terminfo',
+    '/lib/terminfo',
+    '/usr/local/share/terminfo',
+  ]
+  return dirs.filter((dir): dir is string => typeof dir === 'string' && dir !== '')
+}
+
+/** True when `name` resolves to a compiled terminfo entry. */
+function hasTerminfoEntry(name: string): boolean {
+  // Both bucket spellings ncurses accepts: the first letter, or its hex code.
+  const buckets = [name.charAt(0), name.charCodeAt(0).toString(16)]
+  return terminfoDirs().some(dir => buckets.some(bucket => existsSync(join(dir, bucket, name))))
+}
+
+/**
+ * A terminfo entry that actually describes the xterm.js screen.
+ *
+ * `subprocess-local` hands node-pty `name: 'dumb'`, and node-pty overwrites the
+ * spawned environment's `TERM` with that name, so every console's shell
+ * believes it is on a dumb terminal. That entry has no cursor addressing
+ * (`cup`/`cub1`/`cuf1`) and no erase-to-end-of-line (`el`), so zsh's line editor
+ * pans the cursor by overwriting cells with spaces: pasting a command, or
+ * editing mid-line, repaints the prompt as blanks. `TERM` is only consulted
+ * when the line editor initializes — after the shell's startup file has run —
+ * so the shim can repair this by re-exporting a real entry.
+ *
+ * @returns the entry name to export, or undefined when none is installed.
+ */
+function resolveTerminfoName(): string | undefined {
+  return TERMINFO_CANDIDATES.find(hasTerminfoEntry)
+}
+
+/**
  * Environment that gives one console its own shell history.
  *
  * Each console gets its own history file, so ↑ recalls only what that console
@@ -407,6 +467,8 @@ function historyEnv(shell: string, consoleId: string): Record<string, string> {
     if (shim === undefined) return env
     env.ZDOTDIR = shim
     env.CT_HISTFILE = file
+    const term = resolveTerminfoName()
+    if (term !== undefined) env.CT_TERM = term
     return env
   }
 
@@ -565,6 +627,11 @@ class PtyRegistry {
     // and the second half was false even though the PTY is a genuine TTY.
     // FORCE_COLOR=3 restores ANSI explicitly at truecolor depth, matching
     // COLORTERM above; xterm.js renders it.
+    //
+    // Color was the visible half of that override; line editing was the other.
+    // The zsh shim re-exports a real terminfo entry from the environment it
+    // receives below, because `TERM` here is discarded and zle reads `TERM` too
+    // late for anything this half could set directly.
     const env: Record<string, string> = {
       // Currently discarded by the override above; kept so color is correct for
       // free if the provider ever stops forcing the terminal name.
