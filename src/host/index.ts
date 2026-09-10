@@ -349,16 +349,36 @@ class PtyRegistry {
     const cols = clampInt(body.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS)
     const rows = clampInt(body.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS)
 
+    // A PTY child always reports TERM=dumb, no matter what TERM says below.
+    // subprocess-local hands node-pty a fixed `name: 'dumb'`, and node-pty then
+    // runs `env.TERM = opt.name || env.TERM || 'xterm'`, so its own override wins
+    // (verified against this Host's running `subprocess` service). picocolors —
+    // and so Vite's logger — only colors output when `isTTY && TERM !== 'dumb'`,
+    // and the second half was false even though the PTY is a genuine TTY.
+    // FORCE_COLOR=3 restores ANSI explicitly at truecolor depth, matching
+    // COLORTERM above; xterm.js renders it.
+    const env: Record<string, string> = {
+      // Currently discarded by the override above; kept so color is correct for
+      // free if the provider ever stops forcing the terminal name.
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      TERM_PROGRAM: 'dsh-cool-terminal',
+      FORCE_COLOR: '3',
+    }
+    // picocolors tests NO_COLOR *before* FORCE_COLOR, so an inherited NO_COLOR
+    // would veto color regardless of the line above. This Host does not set one
+    // today, but a user export would silently re-monochrome the tab, so drop it.
+    // The provider documents an `undefined` entry as a tombstone that removes an
+    // ambient value (`targetEnvironment` filters `entry[1] !== undefined`); the
+    // terminal spec's `Record<string, string>` type just cannot express that.
+    ;(env as Record<string, string | undefined>).NO_COLOR = undefined
+
     let handle: any
     try {
       handle = await subprocess.spawnTerminal({
         argv: shellArgv(shell),
         cwd,
-        env: {
-          TERM: 'xterm-256color',
-          COLORTERM: 'truecolor',
-          TERM_PROGRAM: 'dsh-cool-terminal',
-        },
+        env,
         rows,
         cols,
         graceMs: GRACE_MS,
