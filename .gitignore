@@ -1,0 +1,21 @@
+node_modules/
+.pnpm-store/
+dist/
+# Compiled output: `pnpm build` regenerates it and prepublishOnly rebuilds before
+# packing. Only `src/` is source of truth.
+lib/
+*.tsbuildinfo
+*.log
+pnpm-debug.log
+.tmp/
+.cache/
+coverage/
+# Pack artifacts (`pnpm pack` / `npm pack`).
+*.tgz
+.DS_Store
+.env
+.env.*
+.agents/
+.vscode/
+.idea/
+*.orig

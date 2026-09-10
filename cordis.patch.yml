@@ -1,0 +1,7 @@
+# dsh-cool-terminal bundle patch: mount the host half.
+#
+# The host half owns the two same-origin HTTP routes the browser tab calls;
+# the Client half is loaded from this package's `dsh.client` manifest.
+- insert:
+    - id: dsh-cool-terminal
+      name: dsh-cool-terminal
