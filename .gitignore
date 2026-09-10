@@ -1,9 +1,9 @@
 node_modules/
 .pnpm-store/
 dist/
-# Compiled output: `pnpm build` regenerates it and prepublishOnly rebuilds before
-# packing. Only `src/` is source of truth.
-lib/
+# `lib/` is build output, but it is committed on purpose so the plugin can be
+# installed straight from a git checkout without a separate build step.
+# `prepublishOnly` still rebuilds it before packing. Only `src/` is source of truth.
 *.tsbuildinfo
 *.log
 pnpm-debug.log
