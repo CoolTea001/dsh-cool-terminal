@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cool-refactor": {
+      "source": "CoolTea001/cool-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cool-refactor/SKILL.md",
+      "computedHash": "d203d4bbeb366e499dd5962dfa551160d5c922d582d7ba940a586938f45b74c3"
+    }
+  }
+}
