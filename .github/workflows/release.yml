@@ -4,6 +4,11 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      update_existing:
+        description: Regenerate the body of an already-published release
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -38,18 +43,33 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG already exists — skip."
+            echo "Release $TAG already exists."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG not found — will create it."
+            echo "Release $TAG not found."
+          fi
+
+      - name: Decide what to do
+        id: action
+        run: |
+          if [ "${{ steps.check.outputs.exists }}" = "false" ]; then
+            echo "mode=create" >> "$GITHUB_OUTPUT"
+            echo "Will create release ${{ steps.version.outputs.tag }}."
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.update_existing }}" = "true" ]; then
+            echo "mode=update" >> "$GITHUB_OUTPUT"
+            echo "Will update the body of release ${{ steps.version.outputs.tag }}."
+          else
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.version.outputs.tag }} already exists — skip."
           fi
 
       - name: Generate release notes
-        if: steps.check.outputs.exists == 'false'
-        run: bash .github/scripts/release-notes.sh "${{ steps.version.outputs.tag }}" > release-notes.md
+        if: steps.action.outputs.mode != 'skip'
+        run: |
+          bash .github/scripts/release-notes.sh "${{ steps.version.outputs.tag }}" > release-notes.md
 
-      - name: Create GitHub release
-        if: steps.check.outputs.exists == 'false'
+      - name: Create release
+        if: steps.action.outputs.mode == 'create'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -57,3 +77,10 @@ jobs:
             --title "${{ steps.version.outputs.tag }}" \
             --target "$GITHUB_SHA" \
             --notes-file release-notes.md
+
+      - name: Update release body
+        if: steps.action.outputs.mode == 'update'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ steps.version.outputs.tag }}" --notes-file release-notes.md
