@@ -7,9 +7,6 @@
 # Groups every non-merge commit since the previous `v*` tag by its
 # conventional-commit type and prints Markdown sections followed by a
 # "Full Changelog" compare link. Run from the repository root.
-#
-# If `.github/release-notes/zh/<tag>.md` exists, the body also gets an
-# "English | 中文" switcher and that file as the Chinese section.
 
 set -euo pipefail
 
@@ -90,21 +87,9 @@ if [ -z "$sections" ]; then
   sections='No notable changes.'
 fi
 
-# Optional hand-written Chinese companion, e.g. `.github/release-notes/zh/v0.1.0.md`.
-# When present the body gets that file as a collapsible Chinese section.
-ZH_FILE=".github/release-notes/zh/${TAG}.md"
-HAS_ZH='false'
-if [ -f "$ZH_FILE" ]; then
-  HAS_ZH='true'
-fi
-
 printf '%s\n' "$sections"
 
 if [ -n "$PREV" ]; then
   printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
     "$REPO" "$PREV" "$TAG"
-fi
-
-if [ "$HAS_ZH" = 'true' ]; then
-  printf '\n<details>\n<summary>中文</summary>\n\n%s\n\n</details>\n' "$(cat "$ZH_FILE")"
 fi
