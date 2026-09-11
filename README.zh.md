@@ -1,5 +1,7 @@
 # dsh-cool-terminal
 
+![dsh-cool-terminal 封面](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.1.0.png)
+
 [English](./README.md) · 中文
 
 ![license: MIT](https://img.shields.io/badge/license-MIT-green) ![node: >=22.19](https://img.shields.io/badge/node-%3E%3D22.19-blue)
