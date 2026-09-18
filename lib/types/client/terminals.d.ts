@@ -39,7 +39,7 @@ export declare function terminalsFor(account: TerminalAccount, key: string): Ter
  */
 export declare function withTerminalList(account: TerminalAccount, key: string, list: readonly TerminalDef[]): TerminalAccount;
 /**
- * Append a console named after its position.
+ * Append a console named with the next free number.
  * @param list - current group list.
  * @param key - group key.
  * @returns the next group list.
