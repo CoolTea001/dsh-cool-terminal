@@ -564,6 +564,11 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     /** Escape unmounts the rename input, and the unmount fires blur; this
      *  keeps that blur from committing the abandoned draft. */
     const skipBlurCommit = React.useRef(false)
+    /** Mirror of `renamingId` for effects that must not depend on it: reading
+     *  the state directly would re-run them — and so refocus the terminal — on
+     *  the very commit that closes the field. */
+    const renamingRef = React.useRef<string | null>(null)
+    renamingRef.current = renamingId
 
     // The sidebar's workspaces are live; the session's own directory is only
     // needed to decide whether it deserves a fallback group.
@@ -678,17 +683,26 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
 
     // Wire the active console: refresh its theme, size it, and start its shell
     // the first time it is shown.
+    //
+    // Keyed on the console id and group key, never on the row objects: renaming
+    // produces a fresh `TerminalDef`, and an object dependency would re-run this
+    // for that unrelated change — yanking focus out of the rename field mid-edit
+    // so the rest of the keystroke (Enter included) reached the PTY instead.
+    const activeId = active?.id
     React.useEffect(() => {
-      if (active === undefined || activeGroup === undefined) return
-      const runtime = runtimes.get(active.id)
+      if (activeId === undefined || activeGroupKey === undefined) return
+      const runtime = runtimes.get(activeId)
       if (runtime === undefined || runtime.element === undefined) return
       runtime.term.options.theme = readTheme()
-      runtime.term.focus()
-      void ensureStarted(runtime, activeGroup, sessionId, bump)
+      // An open rename field owns the keyboard: a stream reconnect or a late
+      // `ensureStarted` that bumps `version` must not steal focus from it.
+      if (renamingRef.current === null) runtime.term.focus()
+      const group = rows.find((row) => row.key === activeGroupKey)
+      if (group !== undefined) void ensureStarted(runtime, group, sessionId, bump)
       // `version` is what re-runs this after the "mark opened" effect above
       // bumps it: the runtime this effect needs does not exist until the next
       // commit, so the first pass returns early and this pass starts the shell.
-    }, [active, activeGroup, sessionId, version, bump])
+    }, [activeId, activeGroupKey, sessionId, version, bump])
 
     const select = (key: string, terminalId: string): void => setSelection({ key, terminalId })
 
