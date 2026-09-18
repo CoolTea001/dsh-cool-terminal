@@ -50,9 +50,6 @@ const MAX_REPLAY_BYTES = 256 * 1024
 /** Terminal cleanup grace before SIGKILL when a session is closed. */
 const GRACE_MS = 3_000
 
-/** A console left with no attached browser is reaped after this long. */
-const IDLE_MS = 15 * 60 * 1000
-
 /** SSE comment cadence; keeps intermediaries from closing an idle stream. */
 const KEEPALIVE_MS = 20_000
 
@@ -114,7 +111,6 @@ interface PtySession {
   exited: { exitCode: number | null; signal: string | null } | null
   /** Serializes writes so keystrokes keep their order across HTTP requests. */
   writes: Promise<void>
-  idle: NodeJS.Timeout | undefined
   keepalive: NodeJS.Timeout | undefined
   reap: NodeJS.Timeout | undefined
 }
@@ -298,10 +294,9 @@ function zshQuote(value: string): string {
  * overridden, so everything the user configured still applies.
  *
  * `INC_APPEND_HISTORY` is what makes the history survive a restart. Without it
- * zsh writes `HISTFILE` only when it exits, so a DSH restart (or the idle
- * reaper) kills the shell before anything is saved. With it, each command is
- * appended as it is entered, and the file is already current when the shell
- * dies.
+ * zsh writes `HISTFILE` only when it exits, so a DSH restart kills the shell
+ * before anything is saved. With it, each command is appended as it is entered,
+ * and the file is already current when the shell dies.
  *
  * The shim also repairs `TERM` (see {@link resolveTerminfoName}). It runs after
  * the user's own configuration, so a `.zshrc` that sets `TERM` itself still
@@ -445,7 +440,7 @@ function resolveTerminfoName(): string | undefined {
  * restart) reloads the commands it ran before.
  *
  * Both shells are also told to flush as they go, because DSH never lets a shell
- * exit cleanly — a restart and the idle reaper both kill it.
+ * exit cleanly — a restart kills it.
  *
  * @param shell - the resolved shell path.
  * @param consoleId - the browser-side console id, the history's identity.
@@ -540,15 +535,7 @@ class PtyRegistry {
   private forget(session: PtySession): void {
     this.sessions.delete(session.id)
     if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
-    this.cancelIdle(session)
     this.cancelReap(session)
-  }
-
-  /** Cancel the pending idle reap, because a browser is about to attach again. */
-  private cancelIdle(session: PtySession): void {
-    if (session.idle === undefined) return
-    clearTimeout(session.idle)
-    session.idle = undefined
   }
 
   /** Cancel a scheduled record reap, because something is about to read it. */
@@ -583,10 +570,7 @@ class PtyRegistry {
     const key = this.keyOf(body)
     if (key !== '') {
       const existing = this.liveFor(key)
-      if (existing !== undefined) {
-        this.cancelIdle(existing)
-        return { session: existing }
-      }
+      if (existing !== undefined) return { session: existing }
       // A remount, or a reload racing the previous page's stream teardown, can
       // issue two opens for one console; they must share one shell.
       const inflight = this.pending.get(key)
@@ -678,7 +662,6 @@ class PtyRegistry {
       clients: new Set(),
       exited: null,
       writes: Promise.resolve(),
-      idle: undefined,
       keepalive: undefined,
       reap: undefined,
     }
@@ -719,7 +702,6 @@ class PtyRegistry {
   /** Attach one SSE response, replaying what the console already printed. */
   attach(session: PtySession, res: any): void {
     this.cancelReap(session)
-    this.cancelIdle(session)
     session.clients.add(res)
     this.ensureKeepalive(session)
 
@@ -749,17 +731,13 @@ class PtyRegistry {
       return
     }
 
+    // A browser leaving is not a reason to end the shell: a page reload or a
+    // sleeping laptop must find the same console still running when it comes
+    // back. A live session ends only when its console is deleted or the plugin
+    // unloads; the replay it keeps in the meantime stays bounded regardless.
     const detach = (): void => {
       session.clients.delete(res)
-      if (session.clients.size === 0) {
-        this.stopKeepalive(session)
-        if (session.exited === null && session.idle === undefined) {
-          session.idle = setTimeout(() => {
-            session.idle = undefined
-            void this.close(session.id)
-          }, IDLE_MS)
-        }
-      }
+      if (session.clients.size === 0) this.stopKeepalive(session)
     }
     res.on('close', detach)
     res.on('error', detach)
@@ -798,7 +776,6 @@ class PtyRegistry {
     if (session.exited !== null) return
     session.exited = exit
     this.stopKeepalive(session)
-    this.cancelIdle(session)
     if (detail !== undefined) {
       const note = `\r\n\x1b[2m[终端结束: ${detail}]\x1b[0m\r\n`
       this.broadcast(session, Buffer.from(note, 'utf8'))

@@ -35,7 +35,7 @@ dsh plugin --profile <your-profile> remove dsh-cool-terminal
 
 - Consoles run a real local shell as the DSH process user, not the confined one-shot shell — treat them as localhost-trusted.
 - A console's geometry is fixed when it is created, because the platform's terminal primitive has no resize verb.
-- Consoles are process-local and do not survive a DSH restart; one left without a browser for 15 minutes is closed automatically.
+- Consoles are process-local and do not survive a DSH restart; one with no browser attached keeps running, and the next page load reattaches to the same shell.
 - Commands run in the selected Workspace's directory (or the session directory), and `cd` is remembered within one console, not across consoles.
 - Command history lives in `~/.dsh-cool-terminal/history`, keyed by console id. Deleting a console leaves its file behind; remove that directory to clear every console's history at once.
 - The PTY provider forces every shell's terminal name to `dumb`, whose terminfo entry cannot move or erase the cursor. A zsh console's startup shim re-exports a real entry (`xterm-256color`, else `xterm`) so line editing, colors, and `clear` behave like a normal xterm; a `.zshrc` that sets `TERM` itself takes precedence.
