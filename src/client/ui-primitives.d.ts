@@ -78,11 +78,11 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export function Menu(props: MenuProps): ReactElement | null
 
   /** Row overflow trigger glyph. */
-  export function IconEllipsisOutline16(props: IconProps): ReactElement
+  export function IconEllipsisOutlineRegular(props: IconProps): ReactElement
   /** Rename glyph. */
-  export function IconEditOutline16(props: IconProps): ReactElement
+  export function IconEditOutlineRegular(props: IconProps): ReactElement
   /** Open-folder glyph (the sidebar's group marker when expanded). */
-  export function IconFolderOpen16(props: IconProps): ReactElement
+  export function IconFolderOpenRegular(props: IconProps): ReactElement
   /** Closed-folder glyph (the sidebar's group marker when collapsed). */
-  export function IconFolderClose16(props: IconProps): ReactElement
+  export function IconFolderCloseRegular(props: IconProps): ReactElement
 }

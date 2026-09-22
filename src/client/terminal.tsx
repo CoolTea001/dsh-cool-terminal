@@ -18,10 +18,10 @@ import * as React from 'react'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import {
-  IconEditOutline16,
-  IconEllipsisOutline16,
-  IconFolderClose16,
-  IconFolderOpen16,
+  IconEditOutlineRegular,
+  IconEllipsisOutlineRegular,
+  IconFolderCloseRegular,
+  IconFolderOpenRegular,
   Menu,
   type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -785,7 +785,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      */
     const renderOverflowMenu = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
       const menuItems: MenuEntry[] = [
-        { id: 'rename', label: '重命名', icon: h(IconEditOutline16, { key: 'icon' }) },
+        { id: 'rename', label: '重命名', icon: h(IconEditOutlineRegular, { key: 'icon' }) },
         {
           id: 'remove',
           label: '删除',
@@ -826,7 +826,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
               menuAnchor.current = event.currentTarget
               setMenuId((current) => (current === terminal.id ? null : terminal.id))
             },
-          }, h(IconEllipsisOutline16)),
+          }, h(IconEllipsisOutlineRegular)),
         }),
       )
     }
@@ -868,7 +868,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       },
       // The shipped sidebar swaps its folder for a hover arrow; here the
       // folder alone carries the state (open vs closed), so it is stable.
-      h('span', { key: 'folder', className: 'dsh-ct-folder' }, h(isCollapsed ? IconFolderClose16 : IconFolderOpen16)),
+      h('span', { key: 'folder', className: 'dsh-ct-folder' }, h(isCollapsed ? IconFolderCloseRegular : IconFolderOpenRegular)),
       h('span', { key: 'title', className: 'dsh-ct-ws-title' }, row.title),
       h('button', {
         key: 'add',
