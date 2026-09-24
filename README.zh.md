@@ -8,37 +8,24 @@
 
 ## 描述
 
-DeepSeek Harness 插件 — 在每个会话的「对话」「轨迹」旁边加一个 **终端** tab，在会话工作目录里直接开一个真正的 shell。
+DeepSeek Harness 终端插件 — 真 shell、真工作目录、状态常驻。
 
 ## 功能介绍
 
-- 在「对话」「轨迹」旁边加一个 **终端** tab，在会话工作目录里开一个真正的 shell。
-- 终端按你的 DSH 工作区分组，目录不属于任何工作区时另有一个会话级终端。
-- shell 状态、滚动历史和每个终端独立的命令历史，都能跨 tab 切换和刷新页面存活。
-- 终端配色跟随当前主题，包括 `dsh-cool-theme` 的各种预设。
+- **按工作区自动分组** — 终端依据 DSH 工作区自动归类，多开也不失序。
+- **状态跨会话、跨刷新持久化** — shell 会话、滚动缓冲与当前路径均常驻保存，切换会话或刷新页面后无缝衔接。
+- **终端级独立命令历史** — 每个终端维护独立的历史记录，↑ 检索时互不干扰。
+- **主题自动适配** — 基于 DSH 主题变量渲染，兼容大多数主题插件。
 
 ## 安装教程
 
-一种最简单的方式是让你的 DSH 帮你安装，如果你想手动安装，请参考：
+使用 DSH 的新增插件功能，输入包名：dsh-cool-terminal 即可。
 
-```
-# 安装
-dsh plugin --profile <your-profile> add dsh-cool-terminal
+## 目前存在的几个限制：
 
-# 卸载
-dsh plugin --profile <your-profile> remove dsh-cool-terminal
-```
-
-> 把 `<your-profile>` 替换成你的 DSH 使用的 profile，例如 web 端通常替换成 `web`，dsh-desktop 端通常替换成 `desktop`。
-
-## 说明
-
-- 终端运行的是真正的本机 shell，以 DSH 进程的用户身份执行，并非那个受限制的一次性 shell，请把这条路由视为仅限本机信任。
-- 终端尺寸在创建时确定，因为平台的 terminal 原语没有 resize 接口。
-- 终端是进程内状态，DSH 重启后不会保留；没有浏览器连接时终端会继续运行，重新打开页面会重新接管同一个终端。
-- 命令在所选工作区目录（或会话目录）执行，`cd` 会在同一个终端内保留，不跨终端。
-- 命令历史保存在 `~/.dsh-cool-terminal/history`，按终端 id 命名。删除终端不会删除对应文件，想一次清空所有终端历史就删掉这个目录。
-- PTY provider 会把每个 shell 的终端名强制成 `dumb`，而该 terminfo 条目没有光标移动和擦除能力。zsh 终端的启动 shim 会重新导出一个真实条目（优先 `xterm-256color`，否则 `xterm`），让行编辑、颜色和 `clear` 表现得像正常 xterm；如果你自己的 `.zshrc` 设置了 `TERM`，则以你的为准。
+- 终端跑的是本机真正的 shell，以 DSH 进程的用户身份执行——它并不是那个受限的一次性 shell，请当成 localhost 可信环境来用。
+- 终端是进程内状态，DSH 重启后不保留。
+- 终端尺寸在创建时确定，暂时不能拖动改变大小。
 
 ## 参与贡献
 
@@ -55,8 +42,7 @@ pnpm install
 // 启动本地开发
 pnpm run dev
 
-// 本地安装
-dsh plugin --profile <your-profile> add /absolute/path/to/dsh-cool-terminal
+// 本地安装：使用 DSH 的新增插件功能，输入本地项目路径即可
 
 // 重启 DSH 服务
 dsh web

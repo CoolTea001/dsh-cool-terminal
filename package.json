@@ -1,7 +1,7 @@
 {
   "name": "dsh-cool-terminal",
-  "version": "0.1.0",
-  "description": "A terminal tab for DeepSeek Harness conversations — run commands in the session workspace right beside Chat and Trajectory.",
+  "version": "0.1.1",
+  "description": "DeepSeek Harness terminal plugin — a real shell, a real working directory, persistent state.",
   "type": "module",
   "license": "MIT",
   "author": "CoolTea",
