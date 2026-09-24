@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'tsdown'
 
@@ -16,6 +17,25 @@ const XTERM_CSS = readFileSync(
   fileURLToPath(new URL('./node_modules/@xterm/xterm/css/xterm.css', import.meta.url)),
   'utf8',
 )
+
+/**
+ * The client icons come from `src/client/assets/*.svg`. The browser half is
+ * loaded by the platform's module loader as one JS file, so sibling asset
+ * files would never be fetched; the artwork is read here at build time and
+ * exposed as the `__DSH_CT_ICONS__` string map `src/client/icons.tsx`
+ * consumes. The map is keyed by asset filename stem, so dropping a new SVG
+ * into the directory (and exporting its component) is all an icon needs.
+ */
+const ICON_DIR = fileURLToPath(new URL('./src/client/assets', import.meta.url))
+const ICONS: Record<string, string> = {}
+for (const file of readdirSync(ICON_DIR)) {
+  if (file.endsWith('.svg')) {
+    ICONS[file.replace(/\.svg$/, '')] = readFileSync(join(ICON_DIR, file), 'utf8')
+  }
+}
+if (Object.keys(ICONS).length === 0) {
+  throw new Error(`dsh-cool-terminal: no icon assets found in ${ICON_DIR}`)
+}
 
 export default defineConfig([
   {
@@ -38,6 +58,7 @@ export default defineConfig([
     dts: false,
     define: {
       __DSH_CT_XTERM_CSS__: JSON.stringify(XTERM_CSS),
+      __DSH_CT_ICONS__: JSON.stringify(ICONS),
     },
     deps: {
       // Both are platform module-table seed words the web boot answers before

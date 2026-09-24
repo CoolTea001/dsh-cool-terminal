@@ -5,18 +5,11 @@
  * boot answers for every client bundle, so it is a runtime `require` this
  * package must not inline (see tsdown.config.ts). The package is not a build
  * dependency here, hence this local declaration: it covers exactly the exports
- * this plugin consumes, mirroring
- * packages/client/ui-primitives/src/Menu.tsx and src/icons/index.tsx.
+ * this plugin consumes, mirroring packages/client/ui-primitives/src/Menu.tsx.
  */
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
   import type { ReactElement, ReactNode } from 'react'
-
-  /** Leading-icon props shared by the primitive icons. */
-  export interface IconProps {
-    size?: number
-    className?: string | undefined
-  }
 
   /** Selectable menu row, optionally with a nested submenu. */
   export interface MenuItem {
@@ -76,13 +69,4 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
 
   /** Render an anchored dropdown menu. */
   export function Menu(props: MenuProps): ReactElement | null
-
-  /** Row overflow trigger glyph. */
-  export function IconEllipsisOutlineRegular(props: IconProps): ReactElement
-  /** Rename glyph. */
-  export function IconEditOutlineRegular(props: IconProps): ReactElement
-  /** Open-folder glyph (the sidebar's group marker when expanded). */
-  export function IconFolderOpenRegular(props: IconProps): ReactElement
-  /** Closed-folder glyph (the sidebar's group marker when collapsed). */
-  export function IconFolderCloseRegular(props: IconProps): ReactElement
 }

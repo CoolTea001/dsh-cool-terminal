@@ -18,13 +18,18 @@ import * as React from 'react'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import {
-  IconEditOutlineRegular,
-  IconEllipsisOutlineRegular,
-  IconFolderCloseRegular,
-  IconFolderOpenRegular,
   Menu,
   type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconEdit,
+  IconFolderClosed,
+  IconFolderOpened,
+  IconMore,
+  IconPlus,
+  IconTerminal,
+  IconTrash,
+} from './icons.js'
 import {
   closeTerminal,
   fetchContext,
@@ -287,59 +292,6 @@ function describeExit(payload: { exitCode?: number | null; signal?: string | nul
     return payload.exitCode === 0 ? '已结束' : `退出码 ${payload.exitCode}`
   }
   return '已结束'
-}
-
-/** Shared geometry for the inline action icons. */
-function iconFrame(children: React.ReactNode): React.ReactElement {
-  return h('svg', {
-    className: 'dsh-ct-svg',
-    viewBox: '0 0 24 24',
-    width: '1em',
-    height: '1em',
-    'aria-hidden': 'true',
-    focusable: 'false',
-  }, h('path', { key: 'frame', d: 'M0 0h24v24H0z', fill: 'none' }), children)
-}
-
-/** A console's leading mark. */
-function iconTerminal(): React.ReactElement {
-  return iconFrame(h('g', {
-    key: 'terminal',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    strokeWidth: 2,
-  },
-  h('path', { key: 'prompt', d: 'm7 11l2-2l-2-2m4 6h4' }),
-  h('rect', { key: 'frame', width: 18, height: 18, x: 3, y: 3, rx: 2, ry: 2 }),
-  ))
-}
-
-/** Delete a console (the menu's destructive row). */
-function iconTrash(): React.ReactElement {
-  return iconFrame(h('path', {
-    key: 'trash',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    strokeWidth: 2,
-    d: 'M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
-  }))
-}
-
-/** Add a console. */
-function iconPlus(): React.ReactElement {
-  return iconFrame(h('path', {
-    key: 'plus',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    strokeWidth: 2,
-    d: 'M5 12h14m-7-7v14',
-  }))
 }
 
 /** The result of {@link createTerminalView}. */
@@ -785,11 +737,11 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      */
     const renderOverflowMenu = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
       const menuItems: MenuEntry[] = [
-        { id: 'rename', label: '重命名', icon: h(IconEditOutlineRegular, { key: 'icon' }) },
+        { id: 'rename', label: '重命名', icon: h(IconEdit, { key: 'icon' }) },
         {
           id: 'remove',
           label: '删除',
-          icon: h('span', { key: 'icon', className: 'dsh-ct-menu-glyph' }, iconTrash()),
+          icon: h(IconTrash, { key: 'icon' }),
           danger: true,
         },
       ]
@@ -826,7 +778,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
               menuAnchor.current = event.currentTarget
               setMenuId((current) => (current === terminal.id ? null : terminal.id))
             },
-          }, h(IconEllipsisOutlineRegular)),
+          }, h(IconMore)),
         }),
       )
     }
@@ -837,7 +789,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const runtime = runtimes.get(terminal.id)
       const live = runtime?.status === 'live'
       const children: React.ReactNode[] = [
-        h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, iconTerminal()),
+        h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, h(IconTerminal)),
       ]
       if (isRenaming) {
         children.push(renderRenameInput(row, terminal))
@@ -868,7 +820,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       },
       // The shipped sidebar swaps its folder for a hover arrow; here the
       // folder alone carries the state (open vs closed), so it is stable.
-      h('span', { key: 'folder', className: 'dsh-ct-folder' }, h(isCollapsed ? IconFolderCloseRegular : IconFolderOpenRegular)),
+      h('span', { key: 'folder', className: 'dsh-ct-folder' }, h(isCollapsed ? IconFolderClosed : IconFolderOpened)),
       h('span', { key: 'title', className: 'dsh-ct-ws-title' }, row.title),
       h('button', {
         key: 'add',
@@ -879,7 +831,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           event.stopPropagation()
           addConsole(row.key)
         },
-      }, iconPlus()),
+      }, h(IconPlus)),
       )
       const children: React.ReactNode[] = [head]
       if (!isCollapsed && list.length > 0) {

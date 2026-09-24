@@ -54,9 +54,6 @@ export const TERMINAL_CSS = [
   '.dsh-ct-term-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-ct-term-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--dsw-alias-label-tertiary)}',
   '.dsh-ct-term:hover .dsh-ct-term-icon,.dsh-ct-term-active .dsh-ct-term-icon{color:var(--dsw-alias-label-primary)}',
-  // A running console is marked while the sidebar is collapsed too, so the
-  // user can see activity without switching to it.
-  '.dsh-ct-term-live .dsh-ct-term-icon{color:var(--dsw-alias-state-success-primary)}',
   '.dsh-ct-term-actions{flex:none;display:none;align-items:center;gap:2px}',
   // The open menu keeps its trigger visible even after the pointer leaves, so
   // the hover affordance never disappears from under an open list.
@@ -66,9 +63,6 @@ export const TERMINAL_CSS = [
   // Row actions live inside an already-highlighted row, so hover only shifts
   // the color instead of stacking a second highlight on top of it.
   '.dsh-ct-icon:hover{color:var(--dsw-alias-label-primary)}',
-  // The menu's icon slot is 16px square (Menu.module.css .itemIcon), which
-  // `.dsh-ct-svg` already matches.
-  '.dsh-ct-menu-glyph{display:inline-flex}',
   // Inline rename edits in place: no field chrome, so only the caret and the
   // text reveal that the label became editable.
   '.dsh-ct-rename{flex:1;min-width:0;margin:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;line-height:inherit;outline:0;caret-color:currentColor}',
