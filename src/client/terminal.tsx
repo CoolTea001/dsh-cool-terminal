@@ -853,9 +853,19 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           if (drag === null || drag.key !== row.key) return
           event.preventDefault()
           event.dataTransfer.dropEffect = 'move'
+          // "Before row N" and "after row N-1" are the same insertion slot;
+          // the mark is normalized to the latter so one slot always draws
+          // exactly one line at one position, instead of two lines a row-gap
+          // apart as the pointer crosses the row boundary. Only the top of
+          // the list keeps a "before" mark — nothing sits above it.
           const edge = dropEdge(event)
+          const list = terminalsFor(account, row.key)
+          const to = list.findIndex((item) => item.id === terminal.id)
+          const mark = edge === 'before' && to > 0
+            ? { id: list[to - 1].id, edge: 'after' as const }
+            : { id: terminal.id, edge }
           setDropMark((current) =>
-            current?.id === terminal.id && current.edge === edge ? current : { id: terminal.id, edge })
+            current?.id === mark.id && current.edge === mark.edge ? current : mark)
         },
         onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
           // Child elements fire their own `dragleave`; only clear the mark
