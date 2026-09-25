@@ -102,6 +102,14 @@ const SCROLLBACK = 5000
 /** Stop retrying a severed stream after this many consecutive failures. */
 const MAX_STREAM_ERRORS = 3
 
+/**
+ * One sidebar row's vertical pitch: the 32px row box plus the 2px flex gap,
+ * mirroring `.dsh-ct-term` and `.dsh-ct-terms` in styles.ts. The drop line is
+ * positioned at whole pitches from the list top, which lands it exactly in
+ * the 2px gap before the row at the insertion index.
+ */
+const ROW_PITCH = 34
+
 const h = React.createElement
 
 /** Drop trailing line breaks and spaces from a message bound for the screen. */
@@ -516,13 +524,14 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     const [menuId, setMenuId] = React.useState<string | null>(null)
     /** Trigger of the open menu; its rect anchors the portaled list. */
     const menuAnchor = React.useRef<HTMLButtonElement | null>(null)
-    /** The console a native drag is carrying: its group key and id.
+    /** Where the current drag would land: the group key plus the insertion
+     *  index into that group's list ("before the row now at that index").
      *  `dataTransfer` cannot be read during `dragover`, so the source is
      *  mirrored in state — it is also what lets rows of *other* groups reject
      *  the drag (reordering stays inside one workspace group). */
     const [drag, setDrag] = React.useState<{ key: string; id: string } | null>(null)
-    /** The row showing the drop mark, and on which edge. */
-    const [dropMark, setDropMark] = React.useState<{ id: string; edge: 'before' | 'after' } | null>(null)
+    /** The slot showing the drop line, if any. */
+    const [dropSlot, setDropSlot] = React.useState<{ key: string; index: number } | null>(null)
     /** Groups the user expanded; anything absent is collapsed. */
     const [expanded, setExpanded] = React.useState<readonly string[]>(() => loadExpanded())
     const [version, setVersion] = React.useState(0)
@@ -803,19 +812,9 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const runtime = runtimes.get(terminal.id)
       const live = runtime?.status === 'live'
       const dragging = drag?.id === terminal.id
-      const mark = dropMark?.id === terminal.id ? dropMark.edge : null
       const children: React.ReactNode[] = [
         h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, h(IconTerminal)),
       ]
-      // The drop mark is its own element, not a shadow on the row: a straight
-      // 2px line straddling the row's edge reads as "the slot it will land
-      // in" instead of tracing the row's rounded outline.
-      if (mark !== null) {
-        children.push(h('span', {
-          key: 'drop-line',
-          className: `dsh-ct-drop-line dsh-ct-drop-line-${mark}`,
-        }))
-      }
       if (isRenaming) {
         children.push(renderRenameInput(row, terminal))
       } else {
@@ -844,7 +843,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           // Fires on the source whether or not the drop landed, so this alone
           // guarantees every drag artifact is cleaned up.
           setDrag(null)
-          setDropMark(null)
+          setDropSlot(null)
         },
         onDragOver: (event: React.DragEvent<HTMLDivElement>) => {
           // A console belongs to exactly one workspace, so rows of any other
@@ -853,37 +852,31 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           if (drag === null || drag.key !== row.key) return
           event.preventDefault()
           event.dataTransfer.dropEffect = 'move'
-          // "Before row N" and "after row N-1" are the same insertion slot;
-          // the mark is normalized to the latter so one slot always draws
-          // exactly one line at one position, instead of two lines a row-gap
-          // apart as the pointer crosses the row boundary. Only the top of
-          // the list keeps a "before" mark — nothing sits above it.
-          const edge = dropEdge(event)
+          // The slot is an index into the group's list ("before the row now
+          // at that index"), not a row+edge pair: the line rendering it lives
+          // on the group container, so every slot draws the identical line —
+          // including slots adjacent to the dragged row itself, which a
+          // row-anchored mark would fade along with its host.
           const list = terminalsFor(account, row.key)
           const to = list.findIndex((item) => item.id === terminal.id)
-          const mark = edge === 'before' && to > 0
-            ? { id: list[to - 1].id, edge: 'after' as const }
-            : { id: terminal.id, edge }
-          setDropMark((current) =>
-            current?.id === mark.id && current.edge === mark.edge ? current : mark)
-        },
-        onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
-          // Child elements fire their own `dragleave`; only clear the mark
-          // when the pointer actually left the row.
-          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
-          setDropMark((current) => (current?.id === terminal.id ? null : current))
+          if (to < 0) return
+          const index = dropEdge(event) === 'before' ? to : to + 1
+          setDropSlot((current) =>
+            current?.key === row.key && current.index === index ? current : { key: row.key, index })
         },
         onDrop: (event: React.DragEvent<HTMLDivElement>) => {
           event.preventDefault()
           const source = drag
           setDrag(null)
-          setDropMark(null)
+          setDropSlot(null)
           if (source === null || source.key !== row.key) return
           const list = terminalsFor(account, row.key)
           const to = list.findIndex((item) => item.id === terminal.id)
           if (to < 0) return
           // Dropping the console onto its own row lands on its own slot, a
-          // no-op; reordering must never disturb the active selection.
+          // no-op; reordering must never disturb the active selection. The
+          // index formula matches `onDragOver` exactly, so the row lands on
+          // the slot the line showed.
           const next = moveTerminal(list, source.id, dropEdge(event) === 'before' ? to : to + 1)
           setAccount(withTerminalList(account, row.key, next))
         },
@@ -920,8 +913,30 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       )
       const children: React.ReactNode[] = [head]
       if (!isCollapsed && list.length > 0) {
-        children.push(h('div', { key: 'terms', className: 'dsh-ct-terms' },
-          list.map((terminal) => renderConsole(row, terminal))))
+        const showDropLine = dropSlot?.key === row.key
+        children.push(h('div', {
+          key: 'terms',
+          className: 'dsh-ct-terms',
+          // Leaving the group (its padding included) clears the line; moving
+          // between rows does not, because the pointer stays inside the
+          // container. Rows no longer clear it themselves: the next row's
+          // `dragover` simply moves the line to the new slot.
+          onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
+            if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+            setDropSlot(null)
+          },
+        },
+          list.map((terminal) => renderConsole(row, terminal)),
+          // One line per group, a child of the container — never of a row —
+          // positioned by slot index at whole row pitches, so it sits exactly
+          // in the 2px gap before the insertion row and looks identical at
+          // every slot.
+          showDropLine ? h('span', {
+            key: 'drop-line',
+            className: 'dsh-ct-drop-line',
+            style: { top: `${ROW_PITCH * dropSlot.index}px` },
+          }) : null,
+        ))
       }
       return h('div', { key: row.key, className: 'dsh-ct-ws' }, children)
     }
