@@ -49,15 +49,19 @@ export const TERMINAL_CSS = [
 
   // Same box and type as `.dsh-ct-ws-head`: 32px tall, 12px/6px inset, 13px text.
   // `user-select:none` keeps a press-then-move from starting a text selection
-  // instead of the row's own drag.
-  '.dsh-ct-term{display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 12px;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;user-select:none}',
+  // instead of the row's own drag; the row is also the positioning parent of
+  // its drop mark.
+  '.dsh-ct-term{position:relative;display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 12px;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;user-select:none}',
   '.dsh-ct-term:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
   '.dsh-ct-term-active{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
   // Drag-and-drop reorder, scoped to one workspace group's rows. The mark is
-  // an inset shadow, so it overlays the row without shifting the layout.
+  // a separate absolutely-positioned line straddling the row's edge — a
+  // straight slot marker, not an outline that traces the row's rounded box.
+  // Half of the 2px line sits in the rows' 2px gap, so it never clips.
   '.dsh-ct-term-dragging{opacity:.4}',
-  '.dsh-ct-term-drop-before{box-shadow:inset 0 2px 0 var(--dsw-alias-state-business-primary)}',
-  '.dsh-ct-term-drop-after{box-shadow:inset 0 -2px 0 var(--dsw-alias-state-business-primary)}',
+  '.dsh-ct-drop-line{position:absolute;left:12px;right:6px;height:2px;border-radius:1px;background:var(--dsw-alias-state-business-primary);pointer-events:none;z-index:1}',
+  '.dsh-ct-drop-line-before{top:-1px}',
+  '.dsh-ct-drop-line-after{bottom:-1px}',
   '.dsh-ct-term-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-ct-term-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--dsw-alias-label-tertiary)}',
   '.dsh-ct-term:hover .dsh-ct-term-icon,.dsh-ct-term-active .dsh-ct-term-icon{color:var(--dsw-alias-label-primary)}',

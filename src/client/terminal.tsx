@@ -807,6 +807,15 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const children: React.ReactNode[] = [
         h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, h(IconTerminal)),
       ]
+      // The drop mark is its own element, not a shadow on the row: a straight
+      // 2px line straddling the row's edge reads as "the slot it will land
+      // in" instead of tracing the row's rounded outline.
+      if (mark !== null) {
+        children.push(h('span', {
+          key: 'drop-line',
+          className: `dsh-ct-drop-line dsh-ct-drop-line-${mark}`,
+        }))
+      }
       if (isRenaming) {
         children.push(renderRenameInput(row, terminal))
       } else {
@@ -816,7 +825,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const menuOpen = menuId === terminal.id
       return h('div', {
         key: terminal.id,
-        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}${live ? ' dsh-ct-term-live' : ''}${dragging ? ' dsh-ct-term-dragging' : ''}${mark === 'before' ? ' dsh-ct-term-drop-before' : ''}${mark === 'after' ? ' dsh-ct-term-drop-after' : ''}`,
+        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}${live ? ' dsh-ct-term-live' : ''}${dragging ? ' dsh-ct-term-dragging' : ''}`,
         title: row.path,
         // An open rename field must not turn a click on the text into a row
         // drag, so dragging is armed only on settled rows.
