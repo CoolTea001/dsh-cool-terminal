@@ -13,6 +13,7 @@ DeepSeek Harness terminal plugin — a real shell, a real working directory, per
 ## Features
 
 - **Grouped by workspace** — Consoles are grouped by your DSH Workspaces automatically, staying tidy no matter how many you open.
+- **Drag to reorder** — Consoles can be reordered by drag and drop within their own workspace group; the order survives reloads.
 - **Persistent across sessions and reloads** — Shell sessions, scrollback, and the current path are preserved across conversation switches and page reloads, picking up right where you left off.
 - **Per-console command history** — Each console keeps its own history; pressing `↑` never pulls in commands from other consoles.
 - **Theme-aware** — Rendered with DSH theme variables, compatible with most theme plugins.

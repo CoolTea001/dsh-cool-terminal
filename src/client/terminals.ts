@@ -136,6 +136,35 @@ export function removeTerminal(list: readonly TerminalDef[], id: string): Termin
   return next.length === list.length ? [...list] : next
 }
 
+/**
+ * Move one console to another position inside its own group.
+ *
+ * Drag-and-drop only ever reorders within the group a console belongs to, so
+ * this takes no group key: the caller hands in the one group's list. `toIndex`
+ * is the position in the *current* list the console should land on — "before
+ * the hovered row" is that row's index, "after" is its index plus one.
+ * Out-of-range positions clamp; dropping a console onto its own slot is a
+ * harmless no-op that still returns a fresh array.
+ * @param list - current group list.
+ * @param id - console to move.
+ * @param toIndex - target position in the current list.
+ * @returns the next group list.
+ */
+export function moveTerminal(
+  list: readonly TerminalDef[],
+  id: string,
+  toIndex: number,
+): TerminalDef[] {
+  const from = list.findIndex((terminal) => terminal.id === id)
+  if (from < 0) return [...list]
+  const index = Math.max(0, Math.min(list.length - 1, toIndex))
+  if (index === from) return [...list]
+  const next = [...list]
+  const [moved] = next.splice(from, 1)
+  next.splice(from < index ? index - 1 : index, 0, moved)
+  return next
+}
+
 /** Parse one persisted console entry, or undefined when it is malformed. */
 function parseTerminalDef(item: unknown): TerminalDef | undefined {
   if (item === null || typeof item !== 'object') return undefined

@@ -43,6 +43,7 @@ import {
   loadAccount,
   loadExpanded,
   loadSelection,
+  moveTerminal,
   removeTerminal,
   renameTerminal,
   saveAccount,
@@ -106,6 +107,12 @@ const h = React.createElement
 /** Drop trailing line breaks and spaces from a message bound for the screen. */
 function trimTail(text: string): string {
   return text.replace(/[\n\r ]+$/, '')
+}
+
+/** Which edge of a hovered console row the pointer sits on: insert before or after. */
+function dropEdge(event: React.DragEvent<HTMLElement>): 'before' | 'after' {
+  const rect = event.currentTarget.getBoundingClientRect()
+  return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
 
 /** Compare directory spellings that differ only by trailing separators. */
@@ -509,6 +516,13 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     const [menuId, setMenuId] = React.useState<string | null>(null)
     /** Trigger of the open menu; its rect anchors the portaled list. */
     const menuAnchor = React.useRef<HTMLButtonElement | null>(null)
+    /** The console a native drag is carrying: its group key and id.
+     *  `dataTransfer` cannot be read during `dragover`, so the source is
+     *  mirrored in state — it is also what lets rows of *other* groups reject
+     *  the drag (reordering stays inside one workspace group). */
+    const [drag, setDrag] = React.useState<{ key: string; id: string } | null>(null)
+    /** The row showing the drop mark, and on which edge. */
+    const [dropMark, setDropMark] = React.useState<{ id: string; edge: 'before' | 'after' } | null>(null)
     /** Groups the user expanded; anything absent is collapsed. */
     const [expanded, setExpanded] = React.useState<readonly string[]>(() => loadExpanded())
     const [version, setVersion] = React.useState(0)
@@ -788,6 +802,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const isRenaming = renamingId === terminal.id
       const runtime = runtimes.get(terminal.id)
       const live = runtime?.status === 'live'
+      const dragging = drag?.id === terminal.id
+      const mark = dropMark?.id === terminal.id ? dropMark.edge : null
       const children: React.ReactNode[] = [
         h('span', { key: 'icon', className: 'dsh-ct-term-icon' }, h(IconTerminal)),
       ]
@@ -800,8 +816,58 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       const menuOpen = menuId === terminal.id
       return h('div', {
         key: terminal.id,
-        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}${live ? ' dsh-ct-term-live' : ''}`,
+        className: `dsh-ct-term${isActive ? ' dsh-ct-term-active' : ''}${menuOpen ? ' dsh-ct-term-menu-open' : ''}${live ? ' dsh-ct-term-live' : ''}${dragging ? ' dsh-ct-term-dragging' : ''}${mark === 'before' ? ' dsh-ct-term-drop-before' : ''}${mark === 'after' ? ' dsh-ct-term-drop-after' : ''}`,
         title: row.path,
+        // An open rename field must not turn a click on the text into a row
+        // drag, so dragging is armed only on settled rows.
+        draggable: !isRenaming,
+        onDragStart: (event: React.DragEvent<HTMLDivElement>) => {
+          if (isRenaming) {
+            event.preventDefault()
+            return
+          }
+          setDrag({ key: row.key, id: terminal.id })
+          event.dataTransfer.effectAllowed = 'move'
+          // Firefox only starts a native drag when some data type is set.
+          event.dataTransfer.setData('text/plain', terminal.title)
+        },
+        onDragEnd: () => {
+          // Fires on the source whether or not the drop landed, so this alone
+          // guarantees every drag artifact is cleaned up.
+          setDrag(null)
+          setDropMark(null)
+        },
+        onDragOver: (event: React.DragEvent<HTMLDivElement>) => {
+          // A console belongs to exactly one workspace, so rows of any other
+          // group reject the drag: without `preventDefault` the browser keeps
+          // its not-allowed cursor and never fires `drop` there.
+          if (drag === null || drag.key !== row.key) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+          const edge = dropEdge(event)
+          setDropMark((current) =>
+            current?.id === terminal.id && current.edge === edge ? current : { id: terminal.id, edge })
+        },
+        onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
+          // Child elements fire their own `dragleave`; only clear the mark
+          // when the pointer actually left the row.
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+          setDropMark((current) => (current?.id === terminal.id ? null : current))
+        },
+        onDrop: (event: React.DragEvent<HTMLDivElement>) => {
+          event.preventDefault()
+          const source = drag
+          setDrag(null)
+          setDropMark(null)
+          if (source === null || source.key !== row.key) return
+          const list = terminalsFor(account, row.key)
+          const to = list.findIndex((item) => item.id === terminal.id)
+          if (to < 0) return
+          // Dropping the console onto its own row lands on its own slot, a
+          // no-op; reordering must never disturb the active selection.
+          const next = moveTerminal(list, source.id, dropEdge(event) === 'before' ? to : to + 1)
+          setAccount(withTerminalList(account, row.key, next))
+        },
         onClick: () => {
           if (isRenaming) return
           select(row.key, terminal.id)

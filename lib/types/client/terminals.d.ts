@@ -62,6 +62,21 @@ export declare function renameTerminal(list: readonly TerminalDef[], id: string,
  */
 export declare function removeTerminal(list: readonly TerminalDef[], id: string): TerminalDef[];
 /**
+ * Move one console to another position inside its own group.
+ *
+ * Drag-and-drop only ever reorders within the group a console belongs to, so
+ * this takes no group key: the caller hands in the one group's list. `toIndex`
+ * is the position in the *current* list the console should land on — "before
+ * the hovered row" is that row's index, "after" is its index plus one.
+ * Out-of-range positions clamp; dropping a console onto its own slot is a
+ * harmless no-op that still returns a fresh array.
+ * @param list - current group list.
+ * @param id - console to move.
+ * @param toIndex - target position in the current list.
+ * @returns the next group list.
+ */
+export declare function moveTerminal(list: readonly TerminalDef[], id: string, toIndex: number): TerminalDef[];
+/**
  * Read the persisted account, dropping anything that does not match the shape
  * (a hand-edited or older entry must not break the tab).
  * @returns the validated account, or an empty one.
