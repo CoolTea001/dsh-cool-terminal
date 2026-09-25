@@ -62,7 +62,7 @@ const EXITED_TTL_MS = 5 * 60 * 1000
  * A console's history is the tab's own bookkeeping, so it lives under the
  * user's home instead of inside the project the console runs in.
  */
-const STATE_DIR = join(homedir(), '.dsh-cool-terminal')
+const STATE_DIR = join(homedir(), '.dsh', 'cool-terminal')
 
 /** One shell history file per console, named after its console id. */
 const HISTORY_DIR = join(STATE_DIR, 'history')
