@@ -66,13 +66,14 @@ export declare function removeTerminal(list: readonly TerminalDef[], id: string)
  *
  * Drag-and-drop only ever reorders within the group a console belongs to, so
  * this takes no group key: the caller hands in the one group's list. `toIndex`
- * is the position in the *current* list the console should land on — "before
- * the hovered row" is that row's index, "after" is its index plus one.
- * Out-of-range positions clamp; dropping a console onto its own slot is a
- * harmless no-op that still returns a fresh array.
+ * is an *insertion* index into the current list — "before the row now at that
+ * index" — so the valid range is `0..list.length`, and `list.length` means
+ * "after the last row". Positions outside that range clamp to the nearest
+ * end; dropping a console onto its own slot (before or right after itself)
+ * is a harmless no-op that still returns a fresh array.
  * @param list - current group list.
  * @param id - console to move.
- * @param toIndex - target position in the current list.
+ * @param toIndex - insertion index into the current list.
  * @returns the next group list.
  */
 export declare function moveTerminal(list: readonly TerminalDef[], id: string, toIndex: number): TerminalDef[];
