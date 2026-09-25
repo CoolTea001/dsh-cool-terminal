@@ -161,8 +161,8 @@ export function moveTerminal(
   const index = Math.max(0, Math.min(list.length, toIndex))
   if (index === from || index === from + 1) return [...list]
   const next = [...list]
-  const [moved] = next.splice(from, 1)
-  next.splice(from < index ? index - 1 : index, 0, moved)
+  next.splice(from, 1)
+  next.splice(from < index ? index - 1 : index, 0, list[from])
   return next
 }
 
