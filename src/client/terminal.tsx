@@ -123,6 +123,22 @@ function dropEdge(event: React.DragEvent<HTMLElement>): 'before' | 'after' {
   return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
 
+/**
+ * Snap a CSS-px length onto the device-pixel grid.
+ *
+ * Display scaling (Windows 125%/150%, browser zoom) maps one CSS pixel to a
+ * fractional number of device pixels; a 2px line whose offset then lands on
+ * a fraction rasterizes to a varying device-pixel count depending on where
+ * it sits, which reads as a drop line that changes thickness slot by slot.
+ * Rounding offsets and thickness to whole device pixels keeps every slot
+ * identical.
+ */
+function snapToDevicePx(value: number): number {
+  const dpr = window.devicePixelRatio
+  if (typeof dpr !== 'number' || !Number.isFinite(dpr) || dpr <= 0) return value
+  return Math.round(value * dpr) / dpr
+}
+
 /** Compare directory spellings that differ only by trailing separators. */
 function normalizePath(value: string): string {
   if (value === '') return ''
@@ -930,11 +946,16 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           // One line per group, a child of the container — never of a row —
           // positioned by slot index at whole row pitches, so it sits exactly
           // in the 2px gap before the insertion row and looks identical at
-          // every slot.
+          // every slot. Both offset and thickness are snapped to device
+          // pixels: under fractional display scaling an unsnapped 2px line
+          // rasterizes to 2 device pixels in some gaps and 3 in others.
           showDropLine ? h('span', {
             key: 'drop-line',
             className: 'dsh-ct-drop-line',
-            style: { top: `${ROW_PITCH * dropSlot.index}px` },
+            style: {
+              top: `${snapToDevicePx(ROW_PITCH * dropSlot.index)}px`,
+              height: `${snapToDevicePx(2)}px`,
+            },
           }) : null,
         ))
       }
