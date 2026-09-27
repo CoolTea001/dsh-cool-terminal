@@ -571,6 +571,11 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      *  the very commit that closes the field. */
     const renamingRef = React.useRef<string | null>(null)
     renamingRef.current = renamingId
+    /** The scrollable console list, and the wrapper the edge fades are pinned
+     *  to (an absolutely positioned child of the scroller would scroll away
+     *  with the content, so the fades are siblings of the list). */
+    const listScroll = React.useRef<HTMLDivElement | null>(null)
+    const listWrap = React.useRef<HTMLDivElement | null>(null)
 
     // The sidebar's workspaces are live; the session's own directory is only
     // needed to decide whether it deserves a fallback group.
@@ -705,6 +710,51 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // bumps it: the runtime this effect needs does not exist until the next
       // commit, so the first pass returns early and this pass starts the shell.
     }, [activeId, activeGroupKey, sessionId, version, bump])
+
+    /**
+     * Show each sidebar edge fade only where the list really hides content.
+     *
+     * Scrolling fires far too often to push two booleans through `setVersion`,
+     * so the answer is written straight onto the wrapper as `data-fade-top` /
+     * `data-fade-bottom` — no re-render, and nothing re-renders the rows. The
+     * effect deliberately has no dependency list: every content change (a group
+     * expanded, a console added, the Workspace list attaching) arrives as a
+     * commit, and re-running it is what re-reads the new heights; `scroll`
+     * covers the offset in between, `ResizeObserver` covers the box itself
+     * (window resize, the sidebar's first layout).
+     *
+     * The same pass records the scrollbar gutter in `--dsh-ct-fade-right`, so a
+     * fade covers the content column and never washes out the scrollbar.
+     */
+    React.useEffect(() => {
+      const scroll = listScroll.current
+      const wrap = listWrap.current
+      if (scroll === null || wrap === null) return
+      const update = (): void => {
+        const overflow = scroll.scrollHeight - scroll.clientHeight > 1
+        wrap.toggleAttribute('data-fade-top', overflow && scroll.scrollTop > 1)
+        wrap.toggleAttribute(
+          'data-fade-bottom',
+          overflow && scroll.scrollTop + scroll.clientHeight < scroll.scrollHeight - 1,
+        )
+        // The gutter only changes with the scrollbar, and re-setting it on
+        // every scroll frame would invalidate style for nothing.
+        const gutter = `${scroll.offsetWidth - scroll.clientWidth}px`
+        if (wrap.style.getPropertyValue('--dsh-ct-fade-right') !== gutter) {
+          wrap.style.setProperty('--dsh-ct-fade-right', gutter)
+        }
+      }
+      update()
+      scroll.addEventListener('scroll', update, { passive: true })
+      // A box change needs no commit of its own, so it is not something a
+      // re-render would pick up — hence the observer, not just `update()`.
+      const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update)
+      observer?.observe(scroll)
+      return () => {
+        scroll.removeEventListener('scroll', update)
+        observer?.disconnect()
+      }
+    })
 
     const select = (key: string, terminalId: string): void => setSelection({ key, terminalId })
 
@@ -957,10 +1007,18 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     }
 
     const sidebar = h('aside', { key: 'side', className: 'dsh-ct-side' },
-      h('div', { key: 'list', className: 'dsh-ct-side-list' },
-        rows.length === 0
-          ? h('div', { key: 'empty', className: 'dsh-ct-empty' }, '暂无工作区')
-          : rows.map((row) => renderGroup(row))),
+      h('div', { key: 'list', className: 'dsh-ct-side-list-wrap', ref: listWrap },
+        h('div', { key: 'scroll', className: 'dsh-ct-side-list', ref: listScroll },
+          rows.length === 0
+            ? h('div', { key: 'empty', className: 'dsh-ct-empty' }, '暂无工作区')
+            : rows.map((row) => renderGroup(row))),
+        // Siblings of the scroller, never children of it: they are pinned to
+        // the visible box so the list slides under them, and they paint over
+        // the rows only while the wrapper carries the matching data attribute
+        // (see the edge-fade effect above). Empty spans — no layout, no text.
+        h('span', { key: 'fade-top', className: 'dsh-ct-fade dsh-ct-fade-top', 'aria-hidden': 'true' }),
+        h('span', { key: 'fade-bottom', className: 'dsh-ct-fade dsh-ct-fade-bottom', 'aria-hidden': 'true' }),
+      ),
     )
 
     // Every opened console keeps its screen mounted; only the active one is

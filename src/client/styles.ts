@@ -28,7 +28,31 @@ export const TERMINAL_CSS = [
 
   // Sidebar
   '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
+  // Edge fades: content dissolves into the sidebar's own surface at whichever
+  // end hides more list, so the eye can tell there is something above/below
+  // the fold without a dark band sitting on top of the rows.
+  //
+  // The scroll box is wrapped rather than being the positioned element itself:
+  // an absolutely positioned child of the scroller scrolls away with the
+  // content, so the fades have to be siblings of the list, pinned to the
+  // wrapper's box, and painted after it — they cover the rows (a background on
+  // the scroller could not: it paints underneath the content).
+  //
+  //   - `pointer-events:none` keeps scrolling, row clicks, and drag-and-drop
+  //     working where a fade covers a row.
+  //   - `opacity` is driven by `data-fade-top` / `data-fade-bottom`, written
+  //     straight to the DOM by the edge-fade effect in terminal.tsx, so a fade
+  //     only appears while that side really has hidden content: a list short
+  //     enough to fit does not fade its first row into a grey smudge.
+  //   - `--dsh-ct-fade-right` is the scrollbar gutter, set by the same effect,
+  //     so the fade covers the content column and leaves the scrollbar alone.
+  '.dsh-ct-side-list-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}',
   '.dsh-ct-side-list{flex:1;min-height:0;overflow:auto;padding:8px 6px 10px}',
+  '.dsh-ct-fade{position:absolute;left:0;right:var(--dsh-ct-fade-right,0);height:28px;pointer-events:none;opacity:0;transition:opacity .15s ease;z-index:2}',
+  '.dsh-ct-fade-top{top:0;background:linear-gradient(to bottom,var(--dsw-alias-bg-layer-1),rgba(0,0,0,0))}',
+  '.dsh-ct-fade-bottom{bottom:0;background:linear-gradient(to top,var(--dsw-alias-bg-layer-1),rgba(0,0,0,0))}',
+  '[data-fade-top] .dsh-ct-fade-top{opacity:1}',
+  '[data-fade-bottom] .dsh-ct-fade-bottom{opacity:1}',
   '.dsh-ct-empty{padding:16px 12px;color:var(--dsw-alias-label-tertiary);font-size:11px;text-align:center}',
 
   '.dsh-ct-ws{margin-bottom:4px}',
