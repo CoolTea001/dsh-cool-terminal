@@ -75,3 +75,9 @@ export const IconEdit = svgIcon('edit')
 
 /** Delete a console (the menu's destructive row glyph, assets/trash.svg). */
 export const IconTrash = svgIcon('trash')
+
+/** Common-commands entry (assets/list.svg). */
+export const IconList = svgIcon('list')
+
+/** Copy a command to the clipboard (assets/copy.svg). */
+export const IconCopy = svgIcon('copy')

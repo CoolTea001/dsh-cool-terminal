@@ -25,6 +25,7 @@ import {
   IconEdit,
   IconFolderClosed,
   IconFolderOpened,
+  IconList,
   IconMore,
   IconPlus,
   IconTerminal,
@@ -37,6 +38,8 @@ import {
   sendInput,
   streamUrl,
 } from './api.js'
+import { CommandsDialog } from './commands-dialog.js'
+import { loadCommands, saveCommands, type CommandDef } from './commands.js'
 import {
   SESSION_KEY,
   addTerminal,
@@ -576,6 +579,15 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      *  with the content, so the fades are siblings of the list). */
     const listScroll = React.useRef<HTMLDivElement | null>(null)
     const listWrap = React.useRef<HTMLDivElement | null>(null)
+    /** The common-commands dialog, and the commands it manages (persisted in
+     *  `commands.ts`; the dialog only renders and reports changes upward). */
+    const [commandsOpen, setCommandsOpen] = React.useState(false)
+    const [commands, setCommands] = React.useState<CommandDef[]>(() => loadCommands())
+    /** Mirror of `commandsOpen` for effects that must not depend on it: the
+     *  dialog owns the keyboard while it is up, so a stream reconnect that
+     *  bumps `version` must not refocus the terminal out of its inputs. */
+    const commandsOpenRef = React.useRef(false)
+    commandsOpenRef.current = commandsOpen
 
     // The sidebar's workspaces are live; the session's own directory is only
     // needed to decide whether it deserves a fallback group.
@@ -619,6 +631,10 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     React.useEffect(() => {
       saveSelection(selection)
     }, [selection])
+
+    React.useEffect(() => {
+      saveCommands(commands)
+    }, [commands])
 
     // Keep a valid selection: prefer the restored console, then the Workspace
     // the session lives in, and skip groups the user has emptied.
@@ -703,7 +719,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       runtime.term.options.theme = readTheme()
       // An open rename field owns the keyboard: a stream reconnect or a late
       // `ensureStarted` that bumps `version` must not steal focus from it.
-      if (renamingRef.current === null) runtime.term.focus()
+      // The commands dialog is the same story while it is up.
+      if (renamingRef.current === null && !commandsOpenRef.current) runtime.term.focus()
       const group = rows.find((row) => row.key === activeGroupKey)
       if (group !== undefined) void ensureStarted(runtime, group, sessionId, bump)
       // `version` is what re-runs this after the "mark opened" effect above
@@ -757,6 +774,29 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     })
 
     const select = (key: string, terminalId: string): void => setSelection({ key, terminalId })
+
+    /**
+     * Insert one common command into the active console's input: the body
+     * only, no newline, so it lands at the prompt for the user to review
+     * before pressing Enter. Serialized through the runtime's own write chain
+     * (same as keystrokes) so it lands in PTY order.
+     * @returns false when no live console can take the command.
+     */
+    const sendCommand = (body: string): boolean => {
+      if (activeId === undefined) return false
+      const runtime = runtimes.get(activeId)
+      const terminalId = runtime?.terminalId
+      if (runtime === undefined || terminalId === undefined) return false
+      runtime.writes = runtime.writes
+        .then(() => sendInput(terminalId, body))
+        .then(() => undefined)
+        .catch(() => undefined)
+      // The dialog closing restores focus to its opener (the footer button);
+      // the deferred focus lands after that pass, back on the console that
+      // just received the command.
+      window.setTimeout(() => runtime.term.focus(), 0)
+      return true
+    }
 
     const addConsole = (key: string): void => {
       const list = addTerminal(terminalsFor(account, key), key)
@@ -1019,6 +1059,21 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         h('span', { key: 'fade-top', className: 'dsh-ct-fade dsh-ct-fade-top', 'aria-hidden': 'true' }),
         h('span', { key: 'fade-bottom', className: 'dsh-ct-fade dsh-ct-fade-bottom', 'aria-hidden': 'true' }),
       ),
+      // Footer seam: the sidebar splits into the scrolling workspace list on
+      // top and a fixed quick-action bar below, so the list scrolls in place
+      // while the action stays pinned to the column's bottom edge.
+      h('footer', { key: 'footer', className: 'dsh-ct-side-footer' },
+        h('button', {
+          key: 'commands',
+          type: 'button',
+          className: 'dsh-ct-ghost-btn',
+          title: '常用命令',
+          'aria-label': '常用命令',
+          onClick: () => setCommandsOpen(true),
+        },
+        h(IconList, { key: 'icon' }),
+        h('span', { key: 'label' }, '常用命令')),
+      ),
     )
 
     // Every opened console keeps its screen mounted; only the active one is
@@ -1044,13 +1099,25 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           : null),
     )
 
+    // The common-commands dialog: modal chrome and stacking belong to the
+    // shipped primitives; the list state and the send target live here.
+    const commandsDialog = h(CommandsDialog, {
+      key: 'commands-dialog',
+      open: commandsOpen,
+      commands,
+      sendable: activeId !== undefined && runtimes.get(activeId)?.terminalId !== undefined,
+      onChange: setCommands,
+      onClose: () => setCommandsOpen(false),
+      send: sendCommand,
+    })
+
     return h('div', {
       className: 'dsh-ct-root',
       // The shell's full-bleed opt-in, the same hook ui-trajectory renders:
       // it drops the transcript width handles and hands this View the whole
       // area instead of the transcript's content column.
       'data-conversation-composer-overlay': '',
-    }, sidebar, main)
+    }, sidebar, main, commandsDialog)
   }
 
   return {

@@ -30,4 +30,8 @@ export declare const IconPlus: ({ className }: DshCtIconProps) => React.ReactEle
 export declare const IconEdit: ({ className }: DshCtIconProps) => React.ReactElement;
 /** Delete a console (the menu's destructive row glyph, assets/trash.svg). */
 export declare const IconTrash: ({ className }: DshCtIconProps) => React.ReactElement;
+/** Common-commands entry (assets/list.svg). */
+export declare const IconList: ({ className }: DshCtIconProps) => React.ReactElement;
+/** Copy a command to the clipboard (assets/copy.svg). */
+export declare const IconCopy: ({ className }: DshCtIconProps) => React.ReactElement;
 //# sourceMappingURL=icons.d.ts.map

@@ -55,6 +55,23 @@ export const TERMINAL_CSS = [
   '[data-fade-bottom] .dsh-ct-fade-bottom{opacity:1}',
   '.dsh-ct-empty{padding:16px 12px;color:var(--dsw-alias-label-tertiary);font-size:11px;text-align:center}',
 
+  // Sidebar footer: the fixed bar under the scrolling workspace list. A
+  // hairline separates it from the list without needing its own background —
+  // it rests on the same surface as the rest of the column.
+  '.dsh-ct-side-footer{flex:none;box-sizing:border-box;padding:4px 8px 10px 8px;}',
+  // Quick-action button in the shipped ghost style (the primitives Button
+  // module's neutral variant, restated here so the plugin stays one CSS file):
+  // transparent surface and primary label at rest, a translucent hover fill,
+  // and the control-radius scale for the pill. Content sits flush left with
+  // the same 12px inset as the workspace rows, so the icon column reads as one
+  // line with the list above it.
+  '.dsh-ct-ghost-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;width:100%;height:44px;padding:0 12px;border:none;border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;cursor:pointer;user-select:none}',
+  '.dsh-ct-ghost-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dsh-ct-ghost-btn:active{background:var(--dsw-alias-interactive-bg-active)}',
+  // The shipped Button leaves the default focus ring; this restates it in the
+  // product accent so it reads on both schemes instead of the UA's blue.
+  '.dsh-ct-ghost-btn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}',
+
   '.dsh-ct-ws{margin-bottom:4px}',
   '.dsh-ct-ws-head{display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 12px;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;user-select:none}',
   '.dsh-ct-ws-head:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
@@ -102,6 +119,63 @@ export const TERMINAL_CSS = [
   // Inline rename edits in place: no field chrome, so only the caret and the
   // text reveal that the label became editable.
   '.dsh-ct-rename{flex:1;min-width:0;margin:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;line-height:inherit;outline:0;caret-color:currentColor}',
+
+  // Common-commands dialog. The chrome (mask, card, header, footer) is the
+  // shipped Modal primitive; these classes only dress the content handed to
+  // it. The width override doubles its own class name: the primitives style
+  // the card with a single-class rule (`width: min(380px, 100%)`), and the
+  // doubled selector wins the tie without depending on stylesheet order —
+  // the dialog portals to `document.body`, so nothing of `.dsh-ct-root`
+  // scopes it.
+  '.dsh-ct-cmd-dialog.dsh-ct-cmd-dialog{width:min(550px,100%)}',
+  // The list scrolls inside the card; the toolbar and description stay fixed.
+  '.dsh-ct-cmd-content{min-height:0;max-height:100%}',
+  '.dsh-ct-cmd-toolbar{flex:none;display:flex;align-items:center;gap:8px;margin-bottom:8px}',
+  '.dsh-ct-cmd-search{flex:1;min-width:0;height:36px;}',
+  // The scroller's wrapper pins the edge fades to the visible box: they are
+  // positioned against it, not against the list (a child of the scroller
+  // would scroll away with the content).
+  '.dsh-ct-cmd-list-wrap{position:relative;display:flex;flex-direction:column;min-height:0}',
+  '.dsh-ct-cmd-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;padding:8px 2px 8px 0px;max-height:min(46vh,380px);overflow:auto}',
+  // Edge fades, the same rhythm as the terminal sidebar: a gradient that
+  // dissolves rows into the dialog card's own surface (layer-2 is the Modal
+  // card background), shown only while that edge actually hides content.
+  // `--dsh-ct-fade-right` is the scrollbar gutter set by the edge-fade
+  // effect, so a fade covers the content column and never washes out the
+  // scrollbar. `pointer-events:none` keeps scrolling and row clicks working
+  // where a fade covers a row.
+  '.dsh-ct-cmd-fade{position:absolute;left:0;right:var(--dsh-ct-fade-right,0);height:32px;pointer-events:none;opacity:0;transition:opacity .15s ease;z-index:2}',
+  '.dsh-ct-cmd-fade-top{top:0;background:linear-gradient(to bottom,var(--dsw-alias-bg-layer-2),rgba(0,0,0,0))}',
+  '.dsh-ct-cmd-fade-bottom{bottom:0;background:linear-gradient(to top,var(--dsw-alias-bg-layer-2),rgba(0,0,0,0))}',
+  '[data-fade-top] .dsh-ct-cmd-fade-top{opacity:1}',
+  '[data-fade-bottom] .dsh-ct-cmd-fade-bottom{opacity:1}',
+  '.dsh-ct-cmd-empty{padding:24px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}',
+  // One saved command: an outlined card with the snippet, its description,
+  // and the always-visible icon actions. The borderless hover fill matches
+  // the shipped outline button's hover (outline adds only the hairline, so a
+  // hover must not rest on a second stroke).
+  '.dsh-ct-cmd-row{position:relative;display:flex;align-items:center;gap:16px;padding:12px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}',
+  '.dsh-ct-cmd-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dsh-ct-cmd-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
+  '.dsh-ct-cmd-body{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px}',
+  '.dsh-ct-cmd-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+  // A missing description reads as a quieter placeholder instead of leaving
+  // the row's second line empty.
+  '.dsh-ct-cmd-desc-none{color:var(--dsw-alias-label-dimmed)}',
+  // Icon actions ride the shared `.dsh-ct-icon` seat; only 删除 shifts color.
+  '.dsh-ct-cmd-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
+  // The shared icon seat is 20px — too thin to land on by touch or with a
+  // cursor. The command-row actions widen the box to 28px (about twice the
+  // area) while the glyph stays 16px centred, so the hover fill, focus ring,
+  // and Tooltip hover band all grow with the tappable surface.
+  '.dsh-ct-icon.dsh-ct-cmd-icon{width:28px;height:28px;border-radius:var(--dsw-radius-md)}',
+  '.dsh-ct-icon.dsh-ct-cmd-danger:hover{color:var(--dsw-alias-state-error-primary)}',
+  // The inline add/edit form: an outlined card like the command rows above
+  // it, so adding reads as one more list entry awaiting its save. The
+  // inputs fill the card; the actions sit right-aligned at the bottom.
+  '.dsh-ct-cmd-edit{display:flex;flex-direction:column;gap:8px;padding:10px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md)}',
+  '.dsh-ct-cmd-edit-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}',
+  '.dsh-ct-cmd-input{height:36px}',
 
   // Console pane. There is no toolbar: the pane is the terminal, and the shell
   // prints its own prompt (which already carries the directory).
