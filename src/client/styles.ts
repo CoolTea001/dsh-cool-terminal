@@ -58,7 +58,7 @@ export const TERMINAL_CSS = [
   // Sidebar footer: the fixed bar under the scrolling workspace list. A
   // hairline separates it from the list without needing its own background —
   // it rests on the same surface as the rest of the column.
-  '.dsh-ct-side-footer{flex:none;box-sizing:border-box;padding:4px 8px 10px 8px;}',
+  '.dsh-ct-side-footer{flex:none;box-sizing:border-box;padding:4px 8px 10px 8px}',
   // Quick-action button in the shipped ghost style (the primitives Button
   // module's neutral variant, restated here so the plugin stays one CSS file):
   // transparent surface and primary label at rest, a translucent hover fill,
@@ -131,12 +131,12 @@ export const TERMINAL_CSS = [
   // The list scrolls inside the card; the toolbar and description stay fixed.
   '.dsh-ct-cmd-content{min-height:0;max-height:100%}',
   '.dsh-ct-cmd-toolbar{flex:none;display:flex;align-items:center;gap:8px;margin-bottom:8px}',
-  '.dsh-ct-cmd-search{flex:1;min-width:0;height:36px;}',
+  '.dsh-ct-cmd-search{flex:1;min-width:0;height:36px}',
   // The scroller's wrapper pins the edge fades to the visible box: they are
   // positioned against it, not against the list (a child of the scroller
   // would scroll away with the content).
   '.dsh-ct-cmd-list-wrap{position:relative;display:flex;flex-direction:column;min-height:0}',
-  '.dsh-ct-cmd-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;padding:8px 2px 8px 0px;max-height:min(46vh,380px);overflow:auto}',
+  '.dsh-ct-cmd-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;padding:8px 2px 8px 0;max-height:min(46vh,380px);overflow:auto}',
   // Edge fades, the same rhythm as the terminal sidebar: a gradient that
   // dissolves rows into the dialog card's own surface (layer-2 is the Modal
   // card background), shown only while that edge actually hides content.

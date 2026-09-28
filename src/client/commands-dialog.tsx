@@ -2,11 +2,12 @@
  * The common-commands dialog.
  *
  * Opens from the sidebar footer's 常用命令 button: a searchable list of saved
- * shell snippets, each row sending its command to the active console. Rows
- * are outlined cards with always-visible icon actions (编辑 / 复制 / 删除);
- * the copy label reports its own success for a second through local feedback
- * state, since the primitives export the clipboard writer but keep their
- * feedback hook private.
+ * shell snippets, each row inserting its command into the active console's
+ * input (no newline — Enter runs it). Rows are outlined cards with
+ * always-visible icon actions (编辑 / 复制 / 删除); copy success is reported
+ * by a toast owned by the dialog, because the primitives export the
+ * clipboard writer but keep their feedback hook private, and a Tooltip
+ * bubble cannot guarantee to stay open across the async write.
  *
  * Adding and editing are inline: 添加命令 (a primary button next to the search
  * field) inserts a form card at the top of the list, and editing a row swaps
@@ -41,30 +42,30 @@ interface CommandsDialogProps {
   /** Whether the dialog is showing (owner-controlled). */
   open: boolean
   readonly commands: readonly CommandDef[]
-  /** Whether an active console can receive a command right now. */
-  sendable: boolean
+  /** Whether an active console can receive text right now. */
+  insertable: boolean
   /** Replace the whole list after an add, edit, or delete. */
   onChange: (next: CommandDef[]) => void
   onClose: () => void
-  /** Send one command to the active console; false means no console can take it. */
-  send: (body: string) => boolean
+  /** Insert one command into the active console; false means none can take it. */
+  insert: (body: string) => boolean
 }
 
 /**
  * One saved command: an outlined card with the snippet, its description, and
- * the always-visible icon actions. Clicking the card sends the command to the
- * active console.
+ * the always-visible icon actions. Clicking the card inserts the command into
+ * the active console's input (no newline — Enter runs it).
  */
 function CommandRow(props: {
   command: CommandDef
-  /** False when no active console can receive the command. */
-  sendable: boolean
-  onSend: (body: string) => void
+  /** False when no active console can receive text. */
+  insertable: boolean
+  onInsert: (body: string) => void
   onEdit: (command: CommandDef) => void
   onCopy: () => void
   onRemove: (id: string) => void
 }): React.ReactElement {
-  const { command, sendable, onSend, onEdit, onCopy, onRemove } = props
+  const { command, insertable, onInsert, onEdit, onCopy, onRemove } = props
   // Icon actions ride the shared `.dsh-ct-icon` seat inside a Tooltip bubble
   // (the bubble replaces the native title, so there is no double tooltip).
   // Copy feedback is the toast owned by the dialog, not the bubble: the
@@ -89,9 +90,9 @@ function CommandRow(props: {
   return h('div', {
     key: command.id,
     className: 'dsh-ct-cmd-row',
-    title: sendable ? '插入到当前终端' : '当前没有激活的终端',
+    title: insertable ? '插入到当前终端' : '当前没有激活的终端',
     onClick: () => {
-      onSend(command.body)
+      onInsert(command.body)
     },
   },
     h('div', { key: 'main', className: 'dsh-ct-cmd-main' },
@@ -157,11 +158,12 @@ function CommandForm(props: {
 
 /** The controlled common-commands dialog; render it with `open` toggled by the footer button. */
 export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
-  const { open, commands, sendable, onChange, onClose, send } = props
+  const { open, commands, insertable, onChange, onClose, insert } = props
   const [query, setQuery] = React.useState('')
   const [editing, setEditing] = React.useState<EditingState | null>(null)
-  /** The copy toast, keyed so a fresh copy restarts it even mid-flight. */
-  const [toast, setToast] = React.useState<{ text: string; key: number } | null>(null)
+  /** The copy toast plus a stamp for the React key, so a fresh copy restarts
+   *  the banner even mid-flight. */
+  const [toast, setToast] = React.useState<{ text: string; stamp: number } | null>(null)
   /** The scrollable list, and the wrapper the edge fades are pinned to. */
   const listScroll = React.useRef<HTMLDivElement | null>(null)
   const listWrap = React.useRef<HTMLDivElement | null>(null)
@@ -214,7 +216,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
    */
   const onCopy = (body: string): void => {
     void writeClipboard(body).then((ok) => {
-      if (ok) setToast({ text: '已复制', key: Date.now() })
+      if (ok) setToast({ text: '已复制', stamp: Date.now() })
     })
   }
 
@@ -230,22 +232,26 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
   }
 
   const renderList = (): React.ReactElement => {
+    /** The inline form in either of its slots: replacing a row, or the add
+     *  card at the top of the list. The two sites differ only in the key. */
+    const renderForm = (editing: EditingState, key: string): React.ReactElement =>
+      h(CommandForm, {
+        key,
+        editing,
+        onChange: setEditing,
+        onCancel: () => setEditing(null),
+        onSave: save,
+      })
     const rows = visible.map((command) => {
       if (editing !== null && editing.id === command.id) {
-        return h(CommandForm, {
-          key: `edit-${command.id}`,
-          editing,
-          onChange: setEditing,
-          onCancel: () => setEditing(null),
-          onSave: save,
-        })
+        return renderForm(editing, `edit-${command.id}`)
       }
       return h(CommandRow, {
         key: command.id,
         command,
-        sendable,
-        onSend: (body) => {
-          if (send(body)) onClose()
+        insertable,
+        onInsert: (body) => {
+          if (insert(body)) onClose()
         },
         onEdit: (target) => setEditing({ id: target.id, body: target.body, description: target.description }),
         onCopy: () => onCopy(command.body),
@@ -254,13 +260,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
     })
     const adding = editing !== null && editing.id === null
     if (adding) {
-      rows.unshift(h(CommandForm, {
-        key: 'add-form',
-        editing,
-        onChange: setEditing,
-        onCancel: () => setEditing(null),
-        onSave: save,
-      }))
+      rows.unshift(renderForm(editing, 'add-form'))
     }
     if (!adding && rows.length === 0) {
       return h('div', { key: 'empty', className: 'dsh-ct-cmd-empty' },
@@ -315,9 +315,9 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
       ],
     }),
     // The copy toast: the Toast primitive portals itself to the page and
-    // fades out on its own timer; `key` restarts it for a second copy.
+    // fades out on its own timer; `stamp` restarts it for a second copy.
     toast === null ? null : h(Toast, {
-      key: toast.key,
+      key: toast.stamp,
       text: toast.text,
       tone: 'success',
       holdMs: COPIED_MS,

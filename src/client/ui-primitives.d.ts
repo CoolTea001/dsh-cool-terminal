@@ -135,15 +135,6 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   /** Bubble placement relative to the anchor. */
   export type TooltipSide = 'right' | 'bottom' | 'top'
 
-  /** Props Tooltip injects into its anchor child; the child's own handlers are chained ahead. */
-  export interface TooltipAnchorProps {
-    ref?: React.Ref<HTMLElement> | undefined
-    onMouseEnter?: React.MouseEventHandler | undefined
-    onMouseLeave?: React.MouseEventHandler | undefined
-    onFocus?: React.FocusEventHandler | undefined
-    onBlur?: React.FocusEventHandler | undefined
-  }
-
   /**
    * Attach a hover/focus tooltip to an anchor element. The `label` prop is
    * read every render, so swapping it (e.g. to 已复制) updates an open bubble.

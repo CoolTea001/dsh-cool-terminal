@@ -782,7 +782,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      * (same as keystrokes) so it lands in PTY order.
      * @returns false when no live console can take the command.
      */
-    const sendCommand = (body: string): boolean => {
+    const insertCommand = (body: string): boolean => {
       if (activeId === undefined) return false
       const runtime = runtimes.get(activeId)
       const terminalId = runtime?.terminalId
@@ -1100,15 +1100,15 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     )
 
     // The common-commands dialog: modal chrome and stacking belong to the
-    // shipped primitives; the list state and the send target live here.
+    // shipped primitives; the list state and the insertion target live here.
     const commandsDialog = h(CommandsDialog, {
       key: 'commands-dialog',
       open: commandsOpen,
       commands,
-      sendable: activeId !== undefined && runtimes.get(activeId)?.terminalId !== undefined,
+      insertable: activeId !== undefined && runtimes.get(activeId)?.terminalId !== undefined,
       onChange: setCommands,
       onClose: () => setCommandsOpen(false),
-      send: sendCommand,
+      insert: insertCommand,
     })
 
     return h('div', {
