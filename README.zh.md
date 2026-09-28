@@ -1,6 +1,6 @@
 # dsh-cool-terminal
 
-![dsh-cool-terminal 封面](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.1.0.png)
+![dsh-cool-terminal 封面](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.3.0.png)
 
 [English](./README.md) · 中文
 
@@ -8,14 +8,14 @@
 
 ## 描述
 
-DeepSeek Harness 终端插件 — 真 shell、真工作目录、状态常驻。
+DeepSeek Harness 终端插件 — 真 shell、真工作目录、状态常驻、常用命令管理。
 
 ## 功能介绍
 
 - **按工作区自动分组** — 终端依据 DSH 工作区自动归类，多开也不失序。
-- **拖拽排序** — 在各自的工作区分组内拖拽终端即可调整顺序，排序结果随刷新保留。
 - **状态跨会话、跨刷新持久化** — shell 会话、滚动缓冲与当前路径均常驻保存，切换会话或刷新页面后无缝衔接。
 - **终端级独立命令历史** — 每个终端维护独立的历史记录，↑ 检索时互不干扰。
+- **常用命令管理** — 新增/修改/删除/使用你创建的常用命令。
 - **主题自动适配** — 基于 DSH 主题变量渲染，兼容大多数主题插件。
 
 ## 安装教程

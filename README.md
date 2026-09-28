@@ -1,6 +1,6 @@
 # dsh-cool-terminal
 
-![dsh-cool-terminal cover](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.1.0.png)
+![dsh-cool-terminal cover](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.3.0.png)
 
 English · [中文](./README.zh.md)
 
@@ -8,14 +8,14 @@ English · [中文](./README.zh.md)
 
 ## Description
 
-DeepSeek Harness terminal plugin — a real shell, a real working directory, persistent state.
+DeepSeek Harness terminal plugin — a real shell, a real working directory, persistent state, and common-command management.
 
 ## Features
 
 - **Grouped by workspace** — Consoles are grouped by your DSH Workspaces automatically, staying tidy no matter how many you open.
-- **Drag to reorder** — Consoles can be reordered by drag and drop within their own workspace group; the order survives reloads.
 - **Persistent across sessions and reloads** — Shell sessions, scrollback, and the current path are preserved across conversation switches and page reloads, picking up right where you left off.
 - **Per-console command history** — Each console keeps its own history; pressing `↑` never pulls in commands from other consoles.
+- **Common command management** — Add, edit, delete, and use the common commands you create.
 - **Theme-aware** — Rendered with DSH theme variables, compatible with most theme plugins.
 
 ## Installation
