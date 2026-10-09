@@ -232,11 +232,19 @@ export const TERMINAL_CSS = [
   // it sits concentric in the radius-lg card behind the 4px pad (16 − 4 = 12),
   // the relationship the dropdown relies on for its hover pill.
   '.dsh-ct-ac-row{display:flex;flex-direction:column;justify-content:center;gap:1px;height:44px;padding:0 8px;border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}',
-  '.dsh-ct-ac-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-  // The keyboard selection rides the accent wash so it stays legible next to
-  // a transient pointer hover instead of competing with it; the description
-  // steps up one label level so the whole card reads as selected.
-  '.dsh-ct-ac-on,.dsh-ct-ac-on:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}',
+  // Deliberately no `.dsh-ct-ac-row:hover` rule: the pointer does not style
+  // itself, it *joins the selection* — `onMouseMove` writes its row into the
+  // popup's `selected` (terminal.tsx `hoverCompletion`) and that one index is
+  // the only thing painted below. A second, CSS-owned `:hover` fill could
+  // light a row the selection is not on (a popup rebuilt under a stationary
+  // cursor after typing is the everyday case), and two rows would be active
+  // at once. One mechanism, one active row.
+  //
+  // The active row — arrow keys or pointer, same paint: `interactive-bg-hover`,
+  // the dropdown's own hover fill, so it reads exactly like a DSH menu row
+  // under the cursor. The description steps up one label level so the whole
+  // card reads as active.
+  '.dsh-ct-ac-on{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
   '.dsh-ct-ac-on .dsh-ct-ac-desc{color:var(--dsw-alias-label-secondary)}',
   // The command renders in the code font — it is shell text, and it must read
   // as the thing that will land in the prompt, not as UI copy.

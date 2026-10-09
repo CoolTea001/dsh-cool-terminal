@@ -943,6 +943,29 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       return true
     }
 
+    /**
+     * Move the popup's selection to the row the pointer is over.
+     *
+     * The pointer drives the *same* index the arrow keys drive (completion.ts
+     * `PopupState.selected`), and that index is the only thing the popup ever
+     * paints, so exactly one row can be active at a time: whichever input
+     * moved last owns the highlight, and `Enter` fills what is lit. A row that
+     * is already selected costs no publish.
+     */
+    const hoverCompletion = (consoleId: string, index: number): void => {
+      const runtime = runtimes.get(consoleId)
+      const popup = runtime?.completion.popup ?? null
+      if (runtime === undefined || popup === null || popup.selected === index) return
+      const screen = readScreen(runtime.term)
+      if (screen === null) return
+      const session: CompletionSession = {
+        line: runtime.completion.line,
+        popup: { items: popup.items, selected: index },
+      }
+      runtime.completion = session
+      publish(completionView(consoleId, session, screen))
+    }
+
     const addConsole = (key: string): void => {
       const list = addTerminal(terminalsFor(account, key), key)
       const created = list[list.length - 1]
@@ -1257,6 +1280,17 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         className: `dsh-ct-ac-row${index === view.selected ? ' dsh-ct-ac-on' : ''}`,
         role: 'option',
         'aria-selected': index === view.selected,
+        // The pointer joins the selection instead of styling itself: there is
+        // no CSS `:hover` fill, so this is what moves the lit row (see
+        // `hoverCompletion`). One mechanism owns the highlight, so the two
+        // inputs can never light two rows at once.
+        //
+        // `move`, not `enter`: a pointer already inside a row must take the
+        // highlight back the moment it moves after the arrow keys walked away
+        // from it (enter has already fired by then), while a popup that opens
+        // under a resting cursor fires nothing — it does not steal a selection
+        // from a hand that is not moving.
+        onMouseMove: () => { hoverCompletion(view.consoleId, index) },
         // Keep focus in xterm: letting the mousedown blur its hidden textarea
         // would move the keystroke stream away from the shell mid-accept.
         onMouseDown: (event: React.MouseEvent) => { event.preventDefault() },

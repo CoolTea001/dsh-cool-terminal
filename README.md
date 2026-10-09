@@ -16,7 +16,7 @@ DeepSeek Harness terminal plugin — a real shell, a real working directory, per
 - **Persistent across sessions and reloads** — Shell sessions, scrollback, and the current path are preserved across conversation switches and page reloads, picking up right where you left off.
 - **Per-console command history** — Each console keeps its own history; pressing `↑` never pulls in commands from other consoles.
 - **Common command management** — Add, edit, delete, and use the common commands you create.
-- **Inline command completion** — Typing in a console pops matching common commands up under the caret; `↑`/`↓` pick one and `Enter` fills it into the command line without running it.
+- **Inline command completion** — Typing in a console pops matching common commands up under the caret; hovering a row or pressing `↑`/`↓` selects one, and `Enter` fills it into the command line without running it. Only one row is ever highlighted.
 - **Theme-aware** — Rendered with DSH theme variables, compatible with most theme plugins.
 
 ## Installation
