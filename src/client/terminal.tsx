@@ -41,6 +41,19 @@ import {
 import { CommandsDialog } from './commands-dialog.js'
 import { loadCommands, saveCommands, type CommandDef } from './commands.js'
 import {
+  anchorOf,
+  emptySession,
+  fillLine,
+  POPUP_MAX_PX,
+  POPUP_MAX_W,
+  sameCompletionView,
+  stepKey,
+  validateLine,
+  type CompletionSession,
+  type CompletionView,
+  type ScreenState,
+} from './completion.js'
+import {
   SESSION_KEY,
   addTerminal,
   loadAccount,
@@ -97,6 +110,19 @@ interface Runtime {
   writes: Promise<void>
   /** Consecutive SSE failures; a reconnecting EventSource resets it. */
   errors: number
+  /** Shadow input line plus any open completion popup (see completion.ts). */
+  completion: CompletionSession
+}
+
+/**
+ * What a runtime needs from the View that owns it: the live command list to
+ * match against, and the sink its completion popup publishes into. Both are
+ * handed over when the runtime is created and stay valid for its lifetime —
+ * the getter reads current React state, the publisher is `setState`.
+ */
+interface RuntimeContext {
+  readonly commands: () => readonly CommandDef[]
+  readonly publish: (view: CompletionView | null) => void
 }
 
 /** Keep the scrollback bounded; this is a convenience view, not a log store. */
@@ -166,6 +192,51 @@ function decodeBase64(value: string): Uint8Array {
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
   return bytes
+}
+
+/**
+ * Read the caret's row out of xterm's buffer for completion (completion.ts).
+ *
+ * `cursorY` counts from `baseY`, so the caret's absolute row is
+ * `baseY + cursorY` and its row within the viewport is that minus
+ * `viewportY`; at the bottom of the scrollback — where a prompt sits — the
+ * two coincide. The row is translated cell-for-cell with no right trim, so
+ * string indexes line up with columns for the arithmetic in `validateLine`.
+ *
+ * @returns the snapshot, or null when the caret is not on a readable row.
+ */
+function readScreen(term: Terminal): ScreenState | null {
+  const buffer = term.buffer.active
+  const absolute = buffer.baseY + buffer.cursorY
+  const caretRow = absolute - buffer.viewportY
+  if (caretRow < 0 || caretRow >= term.rows) return null
+  const line = buffer.getLine(absolute)
+  if (line === undefined) return null
+  return {
+    cursorX: buffer.cursorX,
+    row: line.translateToString(false, 0, Math.min(term.cols, line.length)),
+    caretRow,
+    rows: term.rows,
+    cols: term.cols,
+    appCursorKeys: term.modes.applicationCursorKeysMode,
+  }
+}
+
+/**
+ * The React-facing snapshot of one console's completion state, or null when
+ * no popup should show (nothing matched, the model is untrusted, or the
+ * anchor could not be derived).
+ */
+function completionView(
+  consoleId: string,
+  session: CompletionSession,
+  screen: ScreenState,
+): CompletionView | null {
+  const popup = session.popup
+  if (popup === null) return null
+  const anchor = anchorOf(session.line, screen)
+  if (anchor === null) return null
+  return { consoleId, items: popup.items, selected: popup.selected, anchor }
 }
 
 /**
@@ -386,7 +457,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     runtime.detail = detail
   }
 
-  function createRuntime(id: string): Runtime {
+  function createRuntime(id: string, context: RuntimeContext): Runtime {
     ensureThemeObserver()
     const term = new Terminal({
       cursorBlink: true,
@@ -414,15 +485,40 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       opening: false,
       writes: Promise.resolve(),
       errors: 0,
+      completion: emptySession(),
     }
     // Every keystroke, including control characters such as Ctrl+C, goes to the
     // PTY verbatim; the shell echoes it, which is what puts the cursor inline
-    // after the prompt instead of in a separate input row.
+    // after the prompt instead of in a separate input row. The one exception is
+    // an open completion popup, which claims `↑`/`↓`/`Escape`/`Enter` first —
+    // see completion.ts.
     term.onData((data: string) => {
       const terminalId = runtime.terminalId
       if (terminalId === undefined) return
+      let out = data
+      // Completion only runs while there is something to suggest from: with
+      // an empty command list the keystroke path stays exactly as it was —
+      // no buffer reads, no validation, nothing to publish.
+      const commands = context.commands()
+      if (commands.length > 0) {
+        const screen = readScreen(term)
+        if (screen !== null) {
+          // Re-verify what was typed so far against the screen (completion.ts
+          // `validateLine`), then let an open popup claim `↑`/`↓`/`Escape`/
+          // `Enter` (`stepKey`). A consumed keystroke never reaches the PTY.
+          const stepped = stepKey(
+            { line: validateLine(runtime.completion.line, screen), popup: runtime.completion.popup },
+            data,
+            commands,
+          )
+          runtime.completion = stepped.session
+          context.publish(completionView(id, stepped.session, screen))
+          if (stepped.forward === null) return
+          out = stepped.forward
+        }
+      }
       runtime.writes = runtime.writes
-        .then(() => sendInput(terminalId, data))
+        .then(() => sendInput(terminalId, out))
         .then(() => undefined)
         .catch(() => undefined)
     })
@@ -588,6 +684,22 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      *  bumps `version` must not refocus the terminal out of its inputs. */
     const commandsOpenRef = React.useRef(false)
     commandsOpenRef.current = commandsOpen
+    /** The completion popup being rendered, if any — published by the
+     *  keystroke path (completion.ts) and diffed first, so typing that
+     *  changes nothing costs no re-render at all. */
+    const [completion, setCompletion] = React.useState<CompletionView | null>(null)
+    /** The last published view, kept outside state for that diff. */
+    const completionRef = React.useRef<CompletionView | null>(null)
+    /** The keystroke path's sink; stable for the View's whole lifetime. */
+    const publish = React.useCallback((view: CompletionView | null): void => {
+      if (sameCompletionView(completionRef.current, view)) return
+      completionRef.current = view
+      setCompletion(view)
+    }, [])
+    /** Live mirror of `commands` for the keystroke path, which reads it on
+     *  every keystroke and must not re-render when the list's identity does. */
+    const commandsRef = React.useRef<readonly CommandDef[]>(commands)
+    commandsRef.current = commands
 
     // The sidebar's workspaces are live; the session's own directory is only
     // needed to decide whether it deserves a fallback group.
@@ -690,7 +802,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         if (element === undefined) continue
         const runtime = runtimes.get(id)
         if (runtime === undefined) {
-          const created = createRuntime(id)
+          const created = createRuntime(id, { commands: () => commandsRef.current, publish })
           created.term.open(element)
           created.element = element
           runtimes.set(id, created)
@@ -727,6 +839,17 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // bumps it: the runtime this effect needs does not exist until the next
       // commit, so the first pass returns early and this pass starts the shell.
     }, [activeId, activeGroupKey, sessionId, version, bump])
+
+    // A popup belongs to one console and one command list: switching either —
+    // or opening the dialog that edits the list — dismisses it, so a
+    // suggestion the user can no longer see can never swallow `↑`/`↓`/Enter
+    // in a console or against a list it no longer describes.
+    React.useEffect(() => {
+      for (const runtime of runtimes.values()) {
+        if (runtime.completion.popup !== null) runtime.completion = { line: runtime.completion.line, popup: null }
+      }
+      publish(null)
+    }, [activeId, commands, commandsOpen, publish])
 
     /**
      * Show each sidebar edge fade only where the list really hides content.
@@ -795,6 +918,28 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // the deferred focus lands after that pass, back on the console that
       // just received the command.
       window.setTimeout(() => runtime.term.focus(), 0)
+      return true
+    }
+
+    /**
+     * Fill one popup row into its console — exactly what `Enter` would send
+     * through the keystroke path (completion.ts `fillLine`): Ctrl+E, one
+     * backspace per modeled character, then the body. No newline, so the
+     * filled command waits at the prompt for review.
+     * @returns false when the console is gone or has no PTY.
+     */
+    const acceptCompletion = (consoleId: string, body: string): boolean => {
+      const runtime = runtimes.get(consoleId)
+      const terminalId = runtime?.terminalId
+      if (runtime === undefined || terminalId === undefined) return false
+      const filled = fillLine(runtime.completion.line, body)
+      runtime.completion = { line: filled.line, popup: null }
+      runtime.writes = runtime.writes
+        .then(() => sendInput(terminalId, filled.forward))
+        .then(() => undefined)
+        .catch(() => undefined)
+      publish(null)
+      runtime.term.focus()
       return true
     }
 
@@ -1076,8 +1221,60 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       ),
     )
 
+    /**
+     * The completion popup, positioned against the caret inside its console's
+     * screen wrapper.
+     *
+     * The cell size comes from xterm's own screen element (its inline box is
+     * exactly cols × rows cells); the wrapper is the positioning parent, so
+     * the host's offset from it is the origin. The popup hangs below the caret
+     * row and flips above when the space below cannot hold its tallest state
+     * (every row plus the footer — POPUP_MAX_PX); past the right edge it is
+     * right-aligned to the screen instead of clipped by it.
+     */
+    const renderCompletion = (view: CompletionView): React.ReactNode => {
+      if (view.consoleId !== activeId) return null
+      const wrapper = screens.get(view.consoleId)
+      const term = runtimes.get(view.consoleId)?.term
+      if (wrapper === undefined || term === undefined) return null
+      const box = wrapper.getBoundingClientRect()
+      const host = term.element?.getBoundingClientRect() ?? box
+      const originX = host.left - box.left
+      const originY = host.top - box.top
+      const cellW = term.cols > 0 ? host.width / term.cols : 0
+      const cellH = term.rows > 0 ? host.height / term.rows : 0
+      const left = originX + view.anchor.col * cellW
+      const belowTop = originY + (view.anchor.row + 1) * cellH
+      const aboveBottom = box.height - (originY + view.anchor.row * cellH)
+      const spaceBelow = host.height - (view.anchor.row + 1) * cellH
+      const spaceAbove = originY + view.anchor.row * cellH
+      const above = spaceBelow < POPUP_MAX_PX && spaceAbove > spaceBelow
+      const style: React.CSSProperties = above ? { bottom: aboveBottom } : { top: belowTop }
+      if (left + POPUP_MAX_W > box.width - 4) style.right = 4
+      else style.left = left
+      const entries = view.items.map((command, index) => h('div', {
+        key: command.id,
+        className: `dsh-ct-ac-row${index === view.selected ? ' dsh-ct-ac-on' : ''}`,
+        role: 'option',
+        'aria-selected': index === view.selected,
+        // Keep focus in xterm: letting the mousedown blur its hidden textarea
+        // would move the keystroke stream away from the shell mid-accept.
+        onMouseDown: (event: React.MouseEvent) => { event.preventDefault() },
+        onClick: () => { acceptCompletion(view.consoleId, command.body) },
+      },
+        h('span', { key: 'body', className: 'dsh-ct-ac-body' }, command.body),
+        command.description === ''
+          ? null
+          : h('span', { key: 'desc', className: 'dsh-ct-ac-desc' }, command.description),
+      ))
+      return h('div', { className: 'dsh-ct-ac', role: 'listbox', style },
+        entries,
+        h('div', { key: 'foot', className: 'dsh-ct-ac-foot' }, '↑↓ 选择 · Enter 填充 · Esc 关闭'))
+    }
+
     // Every opened console keeps its screen mounted; only the active one is
-    // visible, so switching consoles never tears down a live shell.
+    // visible, so switching consoles never tears down a live shell. The active
+    // console's screen also carries its completion popup, while one is open.
     const screenNodes = openIds.map((id) => h('div', {
       key: id,
       className: `dsh-ct-screen${active !== undefined && active.id === id ? ' dsh-ct-screen-active' : ''}`,
@@ -1085,7 +1282,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         if (element === null) screens.delete(id)
         else screens.set(id, element)
       },
-    }))
+    }, completion !== null && completion.consoleId === id ? renderCompletion(completion) : null))
 
     // No toolbar: the shell prints its own prompt (which already carries the
     // directory) and Ctrl+C interrupts the foreground command, exactly as in a

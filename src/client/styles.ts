@@ -198,6 +198,58 @@ export const TERMINAL_CSS = [
   // get a black slab while text is being composed.
   '.dsh-ct-screen .xterm .composition-view{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}',
 
+  // Inline completion popup: anchored to the caret inside the active console's
+  // screen wrapper (terminal.tsx `renderCompletion`). The width is fixed, so
+  // rows of different content never resize the card; `max-width` only guards
+  // a pane narrower than the card. Row and footer heights are exactly the
+  // ones completion.ts's flip math assumes (ROW_PX, FOOTER_PX), so once every
+  // MAX_ITEMS row shows the popup's height stays under POPUP_MAX_PX (that
+  // +12 = 8px vertical padding + 2px footer margin + 2px of slack for the
+  // elevation stroke, a shadow that costs no layout — so the flip-above
+  // decision only ever over-measures, never under-measures). The fixed width
+  // mirrors POPUP_MAX_W, the width the anchor clamps its right edge against.
+  //
+  // Card chrome restates the shipped dropdown (primitives Menu.module.css +
+  // MenuSurface.module.css), restated here rather than imported because those
+  // rules ship as hashed CSS-module classes with no public contract:
+  //   - radius-lg card (16px) over the translucent menu material
+  //     (`--dsw-menu-surface-fill` + `--dsw-menu-backdrop-filter`), not an
+  //     opaque layer-2 slab;
+  //   - no border box: the hairline is the elevation stroke, so `border` does
+  //     not add to the measured height;
+  //   - `--dsw-elevation-prominent` (stroke + two soft shadow layers) instead
+  //     of a hand-written drop shadow.
+  '.dsh-ct-ac{position:absolute;z-index:5;box-sizing:border-box;width:420px;max-width:100%;display:flex;flex-direction:column;padding:4px;border:0;border-radius:var(--dsw-radius-lg);background:var(--dsw-menu-surface-fill,var(--dsw-alias-bg-layer-2));backdrop-filter:var(--dsw-menu-backdrop-filter,none);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);font-family:var(--dsw-font-family,sans-serif)}',
+  // The theme darkens the dropdown's elevation stroke to l3 on its own menu
+  // material (`body[data-ds-dark-theme] [data-menu-material]`); this card is
+  // that material, so it takes the same stroke there.
+  'body[data-ds-dark-theme] .dsh-ct-ac{--dsw-elevation-stroke-color:var(--dsw-alias-border-l3)}',
+  // One suggestion stacks its two lines: the command on top, its description
+  // below, so a long command gets the full row instead of squeezing the
+  // description into a shared line. The 44px box is ROW_PX: taller than the
+  // dropdown's own 34px min-height because two lines stack here, and
+  // POPUP_MAX_PX prices exactly this height. The row radius is radius-md so
+  // it sits concentric in the radius-lg card behind the 4px pad (16 − 4 = 12),
+  // the relationship the dropdown relies on for its hover pill.
+  '.dsh-ct-ac-row{display:flex;flex-direction:column;justify-content:center;gap:1px;height:44px;padding:0 8px;border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}',
+  '.dsh-ct-ac-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  // The keyboard selection rides the accent wash so it stays legible next to
+  // a transient pointer hover instead of competing with it; the description
+  // steps up one label level so the whole card reads as selected.
+  '.dsh-ct-ac-on,.dsh-ct-ac-on:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}',
+  '.dsh-ct-ac-on .dsh-ct-ac-desc{color:var(--dsw-alias-label-secondary)}',
+  // The command renders in the code font — it is shell text, and it must read
+  // as the thing that will land in the prompt, not as UI copy.
+  '.dsh-ct-ac-body{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--ds-font-family-code),ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:18px}',
+  '.dsh-ct-ac-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px}',
+  // The keyboard hint closes the popup's height accounting: its 22px box is
+  // FOOTER_PX, and the 12 POPUP_MAX_PX adds on top of the rows is the card's
+  // 8px vertical padding + this footer's 2px top margin + 2px of slack (the
+  // stroke ring is a shadow, so it costs no layout).
+  // 0.5px l2, not 1px l1: the dropdown pins its own footer hairline on l2 for
+  // the same reason — l1 is near-invisible against this surface.
+  '.dsh-ct-ac-foot{display:flex;align-items:center;height:22px;margin-top:2px;padding:0 8px;border-top:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-dimmed);font-size:10.5px;user-select:none}',
+
   // The conversation shell keeps its composer seat mounted for every View. The
   // sanctioned overlay attribute (on the root below, the one ui-trajectory
   // uses) only turns that seat into a floating card over the View; this View
