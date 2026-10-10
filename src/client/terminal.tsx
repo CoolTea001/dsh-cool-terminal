@@ -11,7 +11,11 @@
  *
  * Runtime objects live in this closure keyed by console id, not in React
  * state, so unmounting the View keeps every shell alive; the closure belongs to
- * the plugin instance and is disposed with the plugin's fiber.
+ * the plugin instance and is disposed with the plugin's fiber. The converse is
+ * also true and just as important: those runtimes *outlive* the View that first
+ * showed them, so everything they call back into — the completion sink, the
+ * command list, the re-render — is looked up late through `ViewContext` rather
+ * than captured from whichever mount happened to create them.
  */
 
 import * as React from 'react'
@@ -115,14 +119,22 @@ interface Runtime {
 }
 
 /**
- * What a runtime needs from the View that owns it: the live command list to
- * match against, and the sink its completion popup publishes into. Both are
- * handed over when the runtime is created and stay valid for its lifetime —
- * the getter reads current React state, the publisher is `setState`.
+ * What the currently mounted View offers the runtimes in this closure: the
+ * live command list to match against, the sink the completion popup publishes
+ * into, and the re-render a status change asks for.
+ *
+ * Runtimes outlive the View that first showed them — the conversation shell
+ * unmounts this tab when the user switches away and mounts it again on
+ * return, while every PTY and xterm instance lives on here — so none of this
+ * may be captured from the mount that *created* a runtime: that mount's
+ * `setState` is a no-op once it is gone, and a popup published into it never
+ * renders. The View therefore installs its context on mount, clears it on
+ * unmount, and every late callback reads whatever is installed *now*.
  */
-interface RuntimeContext {
+interface ViewContext {
   readonly commands: () => readonly CommandDef[]
   readonly publish: (view: CompletionView | null) => void
+  readonly bump: () => void
 }
 
 /** Keep the scrollback bounded; this is a convenience view, not a log store. */
@@ -431,6 +443,30 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
   /** Mounted screens, filled by ref callbacks. */
   const screens = new Map<string, HTMLDivElement>()
 
+  /**
+   * The mounted View's context; undefined while no terminal tab is mounted.
+   *
+   * Installed by the View's first effect and cleared by its unmount
+   * (identity-checked, so a late cleanup from a previous mount cannot clear
+   * this one). The runtimes below outlive the View — the tab unmounts when
+   * the user switches away and remounts on return — so every callback held by
+   * a runtime reads this instead of a function captured at creation time (see
+   * {@link ViewContext}).
+   */
+  let viewContext: ViewContext | undefined
+
+  /**
+   * Re-render the mounted View, if one is mounted.
+   *
+   * A status change lands on a runtime that outlives the View, so the bump is
+   * read here, at call time: the bump captured by the mount that first
+   * started a stream is a no-op once that mount is gone, and the badge it
+   * repaints would stay stale after the user returns to the tab.
+   */
+  function bumpView(): void {
+    viewContext?.bump()
+  }
+
   /** Repaint every live console with the tokens in force right now. */
   function applyTheme(): void {
     const theme = readTheme()
@@ -457,7 +493,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     runtime.detail = detail
   }
 
-  function createRuntime(id: string, context: RuntimeContext): Runtime {
+  function createRuntime(id: string): Runtime {
     ensureThemeObserver()
     const term = new Terminal({
       cursorBlink: true,
@@ -499,8 +535,16 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // Completion only runs while there is something to suggest from: with
       // an empty command list the keystroke path stays exactly as it was —
       // no buffer reads, no validation, nothing to publish.
-      const commands = context.commands()
-      if (commands.length > 0) {
+      //
+      // The context is read here, on every keystroke, instead of captured
+      // when the runtime is created: the tab this xterm belongs to unmounts
+      // and remounts while the runtime lives on, and publishing into the
+      // mount that created this runtime would render nothing (see
+      // `ViewContext`). No mounted View means no popup to show, so the
+      // keystroke goes to the PTY exactly as it would with no commands.
+      const context = viewContext
+      const commands = context === undefined ? [] : context.commands()
+      if (context !== undefined && commands.length > 0) {
         const screen = readScreen(term)
         if (screen !== null) {
           // Re-verify what was typed so far against the screen (completion.ts
@@ -542,8 +586,15 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     runtime.term.dispose()
   }
 
-  /** Attach (or re-attach) the SSE stream that carries a console's output. */
-  function attachStream(runtime: Runtime, bump: () => void): void {
+  /**
+   * Attach (or re-attach) the SSE stream that carries a console's output.
+   *
+   * The handlers outlive the mount that opened the stream — the tab is
+   * swapped out and back while the shell keeps running — so they repaint
+   * through {@link bumpView} (the mounted View *now*), never through a
+   * `bump` captured at attach time (see `ViewContext`).
+   */
+  function attachStream(runtime: Runtime): void {
     const terminalId = runtime.terminalId
     if (terminalId === undefined) return
     detachStream(runtime)
@@ -563,7 +614,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       runtime.errors = 0
       if (runtime.status === 'lost') {
         setStatus(runtime, 'live')
-        bump()
+        bumpView()
       }
     }
     source.addEventListener('exit', (event: Event) => {
@@ -575,7 +626,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       }
       setStatus(runtime, 'exited', detail)
       detachStream(runtime)
-      bump()
+      bumpView()
     })
     source.onerror = () => {
       // `EventSource` reconnects on its own. A console the Host has already
@@ -584,12 +635,12 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       if (runtime.errors >= MAX_STREAM_ERRORS) {
         detachStream(runtime)
         setStatus(runtime, 'lost')
-        bump()
+        bumpView()
         return
       }
       if (runtime.status === 'live') {
         setStatus(runtime, 'lost')
-        bump()
+        bumpView()
       }
     }
   }
@@ -599,17 +650,20 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
    *
    * The subprocess seam exposes no resize verb, so this measurement is the
    * size the shell lives at for its whole lifetime.
+   *
+   * Repaints go through {@link bumpView}: this runs in an effect, but the
+   * `await` below can outlive the mount that called it, so the re-render must
+   * find whichever View is mounted by then (see `ViewContext`).
    */
   async function ensureStarted(
     runtime: Runtime,
     group: GroupRow,
     sessionId: string | undefined,
-    bump: () => void,
   ): Promise<void> {
     if (runtime.terminalId !== undefined || runtime.opening) return
     runtime.opening = true
     setStatus(runtime, 'starting')
-    bump()
+    bumpView()
     try {
       // A hidden or zero-sized screen cannot be measured; fit() then keeps the
       // current geometry rather than collapsing the terminal.
@@ -626,13 +680,13 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         const detail = result.error ?? '未知错误'
         setStatus(runtime, 'failed', detail)
         writeBanner(runtime, `无法启动终端: ${trimTail(detail)}`)
-        bump()
+        bumpView()
         return
       }
       runtime.terminalId = result.terminalId
       setStatus(runtime, 'live')
-      attachStream(runtime, bump)
-      bump()
+      attachStream(runtime)
+      bumpView()
     } finally {
       runtime.opening = false
     }
@@ -700,6 +754,20 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      *  every keystroke and must not re-render when the list's identity does. */
     const commandsRef = React.useRef<readonly CommandDef[]>(commands)
     commandsRef.current = commands
+
+    // Hand this mount's context to everything in the plugin closure that
+    // outlives it — the keystroke path and the SSE handlers (see
+    // `ViewContext`). Deliberately the first effect in the component: the
+    // effects below repaint through `bumpView()`, which only works once the
+    // context is installed. The identity check keeps a cleanup from a previous
+    // mount — which can land after this one installed — from clearing it.
+    React.useEffect(() => {
+      const context: ViewContext = { commands: () => commandsRef.current, publish, bump }
+      viewContext = context
+      return () => {
+        if (viewContext === context) viewContext = undefined
+      }
+    }, [publish, bump])
 
     // The sidebar's workspaces are live; the session's own directory is only
     // needed to decide whether it deserves a fallback group.
@@ -802,7 +870,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         if (element === undefined) continue
         const runtime = runtimes.get(id)
         if (runtime === undefined) {
-          const created = createRuntime(id, { commands: () => commandsRef.current, publish })
+          const created = createRuntime(id)
           created.term.open(element)
           created.element = element
           runtimes.set(id, created)
@@ -834,11 +902,11 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // The commands dialog is the same story while it is up.
       if (renamingRef.current === null && !commandsOpenRef.current) runtime.term.focus()
       const group = rows.find((row) => row.key === activeGroupKey)
-      if (group !== undefined) void ensureStarted(runtime, group, sessionId, bump)
+      if (group !== undefined) void ensureStarted(runtime, group, sessionId)
       // `version` is what re-runs this after the "mark opened" effect above
       // bumps it: the runtime this effect needs does not exist until the next
       // commit, so the first pass returns early and this pass starts the shell.
-    }, [activeId, activeGroupKey, sessionId, version, bump])
+    }, [activeId, activeGroupKey, sessionId, version])
 
     // A popup belongs to one console and one command list: switching either —
     // or opening the dialog that edits the list — dismisses it, so a
@@ -1356,6 +1424,9 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     dispose(): void {
       themeObserver?.disconnect()
       themeObserver = undefined
+      // Drop the View's context first: from here on the keystroke path and
+      // the stream handlers have nothing mounted to reach (see `ViewContext`).
+      viewContext = undefined
       for (const runtime of runtimes.values()) disposeRuntime(runtime)
       runtimes.clear()
       screens.clear()
