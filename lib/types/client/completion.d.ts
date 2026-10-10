@@ -12,7 +12,8 @@
  * erase the line:
  *
  * - Keystrokes the model understands (printable input, Backspace, arrows,
- *   Home/End, Ctrl+U/K/W, …) are applied to the model directly.
+ *   Home/End, Ctrl+U/K/W, the meta word-delete ⌥/⌘+Backspace sends, …) are
+ *   applied to the model directly.
  * - Keystrokes that change the line behind our back (history `↑`/`↓`, shell
  *   completion on Tab, an editor redrawing the row) leave the model stale;
  *   the next keystroke's validation notices, and re-syncs from the screen
@@ -131,10 +132,19 @@ export declare function emptySession(): CompletionSession;
  * sides of the caret must spell the model. A failed check first tries to
  * re-sync — sound only with the caret at the end of the line and the prompt
  * intact, which is what a history recall or a shell completion leaves behind.
- * Otherwise the model is marked untrusted, which closes the popup.
+ * Otherwise the model is marked untrusted, which closes the popup. One such
+ * "otherwise" is repairable: with an *empty* line there is no text a fill
+ * could erase, so a row whose prefix no longer matches the captured prompt
+ * re-learns the anchor instead of distrusting every keystroke that follows.
  *
- * Long lines that wrap fall back to comparing only the visible tail: the
- * prompt is on an earlier row, so no re-sync is attempted there.
+ * The checks are then decided by the *screen*, never by the model's own idea
+ * of how long the line is: the row verified above starts with the captured
+ * prompt, so the caret is on the prompt row and column arithmetic against
+ * that row is sound — even when the model still believes it wrapped past
+ * `cols` (the state a fill followed by edits {@link classify} does not decode
+ * used to leave behind, which then refused every popup forever). A caret on a
+ * real continuation row fails the prompt-prefix check above instead, so no
+ * popup ever opens from a wrapped row either way.
  *
  * @param line - the model as of the last keystroke.
  * @param screen - the caret's row read from xterm's buffer.

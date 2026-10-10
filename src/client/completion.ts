@@ -12,7 +12,8 @@
  * erase the line:
  *
  * - Keystrokes the model understands (printable input, Backspace, arrows,
- *   Home/End, Ctrl+U/K/W, …) are applied to the model directly.
+ *   Home/End, Ctrl+U/K/W, the meta word-delete ⌥/⌘+Backspace sends, …) are
+ *   applied to the model directly.
  * - Keystrokes that change the line behind our back (history `↑`/`↓`, shell
  *   completion on Tab, an editor redrawing the row) leave the model stale;
  *   the next keystroke's validation notices, and re-syncs from the screen
@@ -168,10 +169,19 @@ function isLiteralRun(text: string): boolean {
  * sides of the caret must spell the model. A failed check first tries to
  * re-sync — sound only with the caret at the end of the line and the prompt
  * intact, which is what a history recall or a shell completion leaves behind.
- * Otherwise the model is marked untrusted, which closes the popup.
+ * Otherwise the model is marked untrusted, which closes the popup. One such
+ * "otherwise" is repairable: with an *empty* line there is no text a fill
+ * could erase, so a row whose prefix no longer matches the captured prompt
+ * re-learns the anchor instead of distrusting every keystroke that follows.
  *
- * Long lines that wrap fall back to comparing only the visible tail: the
- * prompt is on an earlier row, so no re-sync is attempted there.
+ * The checks are then decided by the *screen*, never by the model's own idea
+ * of how long the line is: the row verified above starts with the captured
+ * prompt, so the caret is on the prompt row and column arithmetic against
+ * that row is sound — even when the model still believes it wrapped past
+ * `cols` (the state a fill followed by edits {@link classify} does not decode
+ * used to leave behind, which then refused every popup forever). A caret on a
+ * real continuation row fails the prompt-prefix check above instead, so no
+ * popup ever opens from a wrapped row either way.
  *
  * @param line - the model as of the last keystroke.
  * @param screen - the caret's row read from xterm's buffer.
@@ -204,28 +214,39 @@ export function validateLine(line: LineModel, screen: ScreenState): LineModel {
   if (promptLen === null) return { ...line, trusted: false }
   // The row prefix must still be the prompt we captured: a prompt that
   // changed (or a capture taken from mid-output, later overwritten by the
-  // real prompt) invalidates every column arithmetic below.
-  if (screen.row.slice(0, promptLen) !== line.promptText) return { ...line, trusted: false }
-
-  if (promptLen + line.cursor < screen.cols) {
-    if (screen.cursorX !== promptLen + line.cursor) return resyncLine(line, screen, promptLen)
-    const tail = Math.min(line.text.length - line.cursor, screen.row.length - screen.cursorX)
-    const before = screen.row.slice(promptLen, screen.cursorX)
-    const after = screen.row.slice(screen.cursorX, screen.cursorX + tail)
-    if (before === line.text.slice(0, line.cursor) && after === line.text.slice(line.cursor, line.cursor + tail)) {
-      return { ...line, trusted: true }
+  // real prompt) invalidates every column arithmetic below. An empty line has
+  // no text a fill could erase, so there the anchor is re-learned from the
+  // row the caret actually sits at — column 0 still refused, and only when
+  // nothing follows the caret, since a row with a tail is mid-output rather
+  // than a prompt. Any other stale anchor stays untrusted, which closes the
+  // popup.
+  if (screen.row.slice(0, promptLen) !== line.promptText) {
+    if (line.text === '' && screen.cursorX > 0 && screen.row.slice(screen.cursorX).trim() === '') {
+      return {
+        ...line,
+        promptLen: screen.cursorX,
+        promptText: screen.row.slice(0, screen.cursorX),
+        trusted: true,
+      }
     }
-    return resyncLine(line, screen, promptLen)
+    return { ...line, trusted: false }
   }
 
-  // The caret has wrapped onto a later row: only the visible tail can be
-  // compared, and a mismatch there is not repairable from one row alone.
-  const before = Math.min(line.cursor, screen.cursorX)
+  // The caret's row starts with the captured prompt, so it *is* the prompt
+  // row: compare from `promptLen` and, on any disagreement, re-adopt what the
+  // screen shows. Decided by the screen rather than by `promptLen + cursor`
+  // versus `cols`, so a model whose cursor still sits past the wrap threshold
+  // — a fill whose later edits arrived as keystrokes {@link classify} does
+  // not decode, say — simply disagrees on `cursorX` and is brought back in
+  // line here instead of distrusting every following keystroke forever.
+  if (screen.cursorX !== promptLen + line.cursor) return resyncLine(line, screen, promptLen)
   const tail = Math.min(line.text.length - line.cursor, screen.row.length - screen.cursorX)
-  const matches =
-    screen.row.slice(screen.cursorX - before, screen.cursorX) === line.text.slice(line.cursor - before, line.cursor)
-    && screen.row.slice(screen.cursorX, screen.cursorX + tail) === line.text.slice(line.cursor, line.cursor + tail)
-  return { ...line, trusted: matches }
+  const before = screen.row.slice(promptLen, screen.cursorX)
+  const after = screen.row.slice(screen.cursorX, screen.cursorX + tail)
+  if (before === line.text.slice(0, line.cursor) && after === line.text.slice(line.cursor, line.cursor + tail)) {
+    return { ...line, trusted: true }
+  }
+  return resyncLine(line, screen, promptLen)
 }
 
 /**
@@ -295,7 +316,18 @@ const SINGLE_KEYS: Record<string, Key> = {
   [byte(23)]: { kind: 'kill-word' },
 }
 
-/** The escape sequences the model decodes, keyed by their raw bytes. */
+/**
+ * The escape sequences the model decodes, keyed by their raw bytes.
+ *
+ * `ESC DEL`/`ESC BS` are the meta word-delete a shell receives from
+ * ⌥/⌘+Backspace (`macOptionIsMeta` turns the modifier into ESC): decoded as
+ * {@link Key} `kill-word`, they shrink the model together with the screen.
+ * Left as `other` they would freeze the model while the shell keeps erasing —
+ * the state that, once a fill had wrapped the line, refused every popup for
+ * the rest of the line because the stale cursor never left the wrap branch.
+ * The word boundaries are only an approximation of the shell's; the next
+ * {@link validateLine} re-syncs the exact text when they disagree.
+ */
 const SEQUENCE_KEYS: Record<string, Key> = {
   [byte(27) + '[A']: { kind: 'up' },
   [byte(27) + '[B']: { kind: 'down' },
@@ -308,6 +340,8 @@ const SEQUENCE_KEYS: Record<string, Key> = {
   [byte(27) + '[4~']: { kind: 'end' },
   [byte(27) + 'OF']: { kind: 'end' },
   [byte(27) + '[3~']: { kind: 'delete' },
+  [byte(27) + byte(127)]: { kind: 'kill-word' },
+  [byte(27) + byte(8)]: { kind: 'kill-word' },
 }
 
 /**
