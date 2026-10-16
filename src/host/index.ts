@@ -139,7 +139,16 @@ interface PtySession {
   replay: Buffer[]
   replayBytes: number
   readonly clients: Set<any>
-  exited: { exitCode: number | null; signal: string | null } | null
+  /**
+   * How the shell ended, or null while it is live.
+   *
+   * `reason` is present only when the Host itself ended the console — a broken
+   * output pipe, a failed spawn — and is a code (`output-failed`) for the
+   * causes this package owns or a process message for anything else. The
+   * Browser half turns it into the note it writes into the scrollback, which
+   * is why no displayable copy is rendered here.
+   */
+  exited: { exitCode: number | null; signal: string | null; reason?: string } | null
   /** Serializes writes so keystrokes keep their order across HTTP requests. */
   writes: Promise<void>
   keepalive: NodeJS.Timeout | undefined
@@ -867,7 +876,7 @@ class PtyRegistry {
       this.broadcast(session, Buffer.from(chunk as Uint8Array))
     })
     handle.output?.on?.('error', () => {
-      this.finish(session, { exitCode: null, signal: null }, 'terminal output stream failed')
+      this.finish(session, { exitCode: null, signal: null }, 'output-failed')
     })
     void handle.done.then(
       (outcome: any) => this.finish(session, {
@@ -980,22 +989,29 @@ class PtyRegistry {
       .catch(() => undefined)
   }
 
+  /**
+   * Retire one console and tell every attached browser how it ended.
+   *
+   * The note a user reads when the Host, not the shell, ended the console is
+   * NOT written here: it is displayable copy, so the Browser half owns it and
+   * writes it in the language on screen (see `reason` on the exit event).
+   * @param session - the console that ended.
+   * @param exit - the shell's own exit facts.
+   * @param reason - why the Host ended it, when the shell did not; a code for
+   *   the causes this package owns, a process message otherwise.
+   */
   private finish(
     session: PtySession,
     exit: { exitCode: number | null; signal: string | null },
-    detail?: string,
+    reason?: string,
   ): void {
     if (session.exited !== null) return
-    session.exited = exit
+    session.exited = reason === undefined ? exit : { ...exit, reason }
     this.stopKeepalive(session)
     this.stopForegroundWatch(session)
-    if (detail !== undefined) {
-      const note = `\r\n\x1b[2m[终端结束: ${detail}]\x1b[0m\r\n`
-      this.broadcast(session, Buffer.from(note, 'utf8'))
-    }
     for (const client of session.clients) {
       if (client.writableEnded) continue
-      sendEvent(client, 'exit', exit)
+      sendEvent(client, 'exit', session.exited)
       client.end()
     }
     session.clients.clear()

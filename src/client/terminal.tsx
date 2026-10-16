@@ -76,6 +76,7 @@ import {
   type TerminalSelection,
   type WorkspaceBridge,
 } from './terminals.js'
+import type { Translate } from './locales.js'
 
 /** One entry of the left sidebar: a Workspace, or the session fallback. */
 interface GroupRow {
@@ -443,13 +444,34 @@ function readCodeFont(): string {
   return family === '' ? DEFAULT_CODE_FONT : `${family}, ${DEFAULT_CODE_FONT}`
 }
 
+/** The exit facts the Host reports for one console. */
+interface ExitPayload {
+  readonly exitCode?: number | null
+  readonly signal?: string | null
+  /** Why the Host itself ended the console; absent for a shell that just exited. */
+  readonly reason?: string | null
+}
+
 /** Human-readable summary of a terminal exit. */
-function describeExit(payload: { exitCode?: number | null; signal?: string | null }): string {
-  if (typeof payload.signal === 'string' && payload.signal !== '') return `信号 ${payload.signal}`
-  if (typeof payload.exitCode === 'number') {
-    return payload.exitCode === 0 ? '已结束' : `退出码 ${payload.exitCode}`
+function describeExit(payload: ExitPayload, t: Translate): string {
+  if (typeof payload.signal === 'string' && payload.signal !== '') {
+    return t('terminal.signal', { signal: payload.signal })
   }
-  return '已结束'
+  if (typeof payload.exitCode === 'number') {
+    return payload.exitCode === 0 ? t('terminal.ended') : t('terminal.exitCode', { code: payload.exitCode })
+  }
+  return t('terminal.ended')
+}
+
+/**
+ * The Host's own reason for ending a console, as displayable text.
+ *
+ * The Host reports a code for the reasons it owns and passes anything else
+ * through verbatim: a process error message is already a message, and
+ * translating it would invent copy for text this package does not own.
+ */
+function describeReason(reason: string, t: Translate): string {
+  return reason === 'output-failed' ? t('terminal.reason.outputFailed') : reason
 }
 
 /**
@@ -491,9 +513,11 @@ export interface TerminalViewHandle {
 /**
  * Build the View component and its teardown.
  * @param bridge - late-bound Workspace list source.
+ * @param t - translator for every string the tab renders, including the ones
+ *   written outside React (the failure banner, the exit status).
  * @returns the Conversation View component plus a plugin-lifetime disposer.
  */
-export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle {
+export function createTerminalView(bridge: WorkspaceBridge, t: Translate): TerminalViewHandle {
   /** Live consoles; survives this View being unmounted. */
   const runtimes = new Map<string, Runtime>()
   /** Console ids whose screen element is mounted, in first-activation order. */
@@ -723,13 +747,21 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       if (!shell) closeCompletion(runtime)
     })
     source.addEventListener('exit', (event: Event) => {
-      let detail = '已结束'
+      let payload: ExitPayload = {}
       try {
-        detail = describeExit(JSON.parse((event as MessageEvent).data) as { exitCode?: number | null; signal?: string | null })
+        payload = JSON.parse((event as MessageEvent).data) as ExitPayload
       } catch {
-        /* keep the default label */
+        /* a malformed frame keeps the neutral summary */
       }
-      setStatus(runtime, 'exited', detail)
+      setStatus(runtime, 'exited', describeExit(payload, t))
+      // The Host ends a console itself only when something went wrong (a broken
+      // output pipe, a spawn failure); a shell the user exited prints its own
+      // goodbye and gets no note. The note is written here rather than by the
+      // Host so it lands in the language on screen now, not the one the Host
+      // was started under.
+      if (typeof payload.reason === 'string' && payload.reason !== '') {
+        writeBanner(runtime, t('terminal.endedBanner', { detail: describeReason(payload.reason, t) }))
+      }
       detachStream(runtime)
       bumpView()
     })
@@ -782,9 +814,9 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // this console already owns, which is what survives a page reload.
       const result = await openTerminal(sessionId, workspaceId, runtime.term.cols, runtime.term.rows, runtime.id)
       if (result.terminalId === undefined || result.terminalId === '') {
-        const detail = result.error ?? '未知错误'
+        const detail = result.error ?? t('terminal.unknown')
         setStatus(runtime, 'failed', detail)
-        writeBanner(runtime, `无法启动终端: ${trimTail(detail)}`)
+        writeBanner(runtime, t('terminal.startFailed', { detail: trimTail(detail) }))
         bumpView()
         return
       }
@@ -800,7 +832,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
   function TerminalView(props: any): React.ReactElement {
     const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : undefined
     const snapshot = React.useSyncExternalStore(bridge.subscribe, bridge.getSnapshot, bridge.getSnapshot)
-    const [account, setAccount] = React.useState<TerminalAccount>(() => loadAccount())
+    const [account, setAccount] = React.useState<TerminalAccount>(() => loadAccount(t('terminal.untitled')))
     const [sessionCwd, setSessionCwd] = React.useState('')
     const [selection, setSelection] = React.useState<TerminalSelection | null>(() => loadSelection())
     const [renamingId, setRenamingId] = React.useState<string | null>(null)
@@ -896,10 +928,10 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       }))
       const cwd = normalizePath(sessionCwd)
       if (cwd !== '' && !list.some((row) => normalizePath(row.path) === cwd)) {
-        list.unshift({ key: SESSION_KEY, title: '当前会话', path: cwd, kind: 'session' })
+        list.unshift({ key: SESSION_KEY, title: t('sidebar.session'), path: cwd, kind: 'session' })
       }
       return list
-    }, [snapshot, sessionCwd])
+    }, [snapshot, sessionCwd, t])
 
     const rowSignature = rows.map((row) => row.key).join('|')
 
@@ -1132,7 +1164,9 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     }
 
     const addConsole = (key: string): void => {
-      const list = addTerminal(terminalsFor(account, key), key)
+      // The auto title is minted in the language on screen, and the numbering
+      // counts consoles named in either language (see `AUTO_TITLE`).
+      const list = addTerminal(terminalsFor(account, key), key, (n) => t('terminal.autoTitle', { n }))
       const created = list[list.length - 1]
       setAccount(withTerminalList(account, key, list))
       // The ＋ sits on the header, so it is reachable while collapsed: adding
@@ -1210,10 +1244,10 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      */
     const renderOverflowMenu = (row: GroupRow, terminal: TerminalDef): React.ReactElement => {
       const menuItems: MenuEntry[] = [
-        { id: 'rename', label: '重命名', icon: h(IconEdit, { key: 'icon' }) },
+        { id: 'rename', label: t('terminal.rename'), icon: h(IconEdit, { key: 'icon' }) },
         {
           id: 'remove',
-          label: '删除',
+          label: t('terminal.remove'),
           icon: h(IconTrash, { key: 'icon' }),
           danger: true,
         },
@@ -1244,8 +1278,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           anchor: h('button', {
             type: 'button',
             className: 'dsh-ct-icon',
-            title: '更多操作',
-            'aria-label': '更多操作',
+            title: t('terminal.more'),
+            'aria-label': t('terminal.more'),
             onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation()
               menuAnchor.current = event.currentTarget
@@ -1310,7 +1344,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
         key: 'add',
         type: 'button',
         className: 'dsh-ct-icon dsh-ct-ws-add',
-        title: '新建终端',
+        title: t('sidebar.new'),
         onClick: (event: React.MouseEvent) => {
           event.stopPropagation()
           addConsole(row.key)
@@ -1383,7 +1417,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       h('div', { key: 'list', className: 'dsh-ct-side-list-wrap', ref: listWrap },
         h('div', { key: 'scroll', className: 'dsh-ct-side-list', ref: listScroll },
           rows.length === 0
-            ? h('div', { key: 'empty', className: 'dsh-ct-empty' }, '暂无工作区')
+            ? h('div', { key: 'empty', className: 'dsh-ct-empty' }, t('sidebar.empty'))
             : rows.map((row) => renderGroup(row))),
         // Siblings of the scroller, never children of it: they are pinned to
         // the visible box so the list slides under them, and they paint over
@@ -1400,12 +1434,12 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           key: 'commands',
           type: 'button',
           className: 'dsh-ct-ghost-btn',
-          title: '常用命令',
-          'aria-label': '常用命令',
+          title: t('commands.title'),
+          'aria-label': t('commands.title'),
           onClick: () => setCommandsOpen(true),
         },
         h(IconList, { key: 'icon' }),
-        h('span', { key: 'label' }, '常用命令')),
+        h('span', { key: 'label' }, t('commands.title'))),
       ),
     )
 
@@ -1468,7 +1502,7 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       ))
       return h('div', { className: 'dsh-ct-ac', role: 'listbox', style },
         entries,
-        h('div', { key: 'foot', className: 'dsh-ct-ac-foot' }, '↑↓ 选择 · Enter 填充 · Esc 关闭'))
+        h('div', { key: 'foot', className: 'dsh-ct-ac-foot' }, t('completion.footer')))
     }
 
     // Every opened console keeps its screen mounted; only the active one is
@@ -1491,16 +1525,18 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       h('div', { key: 'out', className: 'dsh-ct-out' },
         screenNodes,
         openIds.length === 0
-          ? h('div', { key: 'hint', className: 'dsh-ct-hint' }, '请在左侧工作区点击 ＋ 新建一个终端')
+          ? h('div', { key: 'hint', className: 'dsh-ct-hint' }, t('main.hint'))
           : null),
     )
 
     // The common-commands dialog: modal chrome and stacking belong to the
-    // shipped primitives; the list state and the insertion target live here.
+    // shipped primitives; the list state, the insertion target, and the copy's
+    // language live here.
     const commandsDialog = h(CommandsDialog, {
       key: 'commands-dialog',
       open: commandsOpen,
       commands,
+      t,
       insertable: activeId !== undefined && runtimes.get(activeId)?.terminalId !== undefined,
       onChange: setCommands,
       onClose: () => setCommandsOpen(false),

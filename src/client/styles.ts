@@ -162,7 +162,7 @@ export const TERMINAL_CSS = [
   // A missing description reads as a quieter placeholder instead of leaving
   // the row's second line empty.
   '.dsh-ct-cmd-desc-none{color:var(--dsw-alias-label-dimmed)}',
-  // Icon actions ride the shared `.dsh-ct-icon` seat; only 删除 shifts color.
+  // Icon actions ride the shared `.dsh-ct-icon` seat; only Delete shifts color.
   '.dsh-ct-cmd-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
   // The shared icon seat is 20px — too thin to land on by touch or with a
   // cursor. The command-row actions widen the box to 28px (about twice the

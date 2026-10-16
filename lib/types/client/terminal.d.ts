@@ -19,6 +19,7 @@
  */
 import * as React from 'react';
 import { type WorkspaceBridge } from './terminals.js';
+import type { Translate } from './locales.js';
 /** The result of {@link createTerminalView}. */
 export interface TerminalViewHandle {
     /** The Conversation View component to register into `conversation.view`. */
@@ -29,7 +30,9 @@ export interface TerminalViewHandle {
 /**
  * Build the View component and its teardown.
  * @param bridge - late-bound Workspace list source.
+ * @param t - translator for every string the tab renders, including the ones
+ *   written outside React (the failure banner, the exit status).
  * @returns the Conversation View component plus a plugin-lifetime disposer.
  */
-export declare function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle;
+export declare function createTerminalView(bridge: WorkspaceBridge, t: Translate): TerminalViewHandle;
 //# sourceMappingURL=terminal.d.ts.map

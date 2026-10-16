@@ -17,6 +17,7 @@ DeepSeek Harness terminal plugin — a real shell, workspace sync, persistent st
 - **Per-console command history** — Each console keeps its own history; pressing `↑` never pulls in commands from other consoles.
 - **Common command management** — Add, edit, delete, and use the common commands you create.
 - **Inline command completion** — Typing in a console pops matching common commands up under the caret; hovering a row or pressing `↑`/`↓` selects one, and `Enter` fills it into the command line without running it.
+- **Bilingual (English / Chinese)** — Every string the plugin renders follows DSH's language setting and switches live, with new console names minted in the language on screen.
 - **Theme-aware** — Rendered with DSH theme variables, compatible with most theme plugins.
 
 ## Installation

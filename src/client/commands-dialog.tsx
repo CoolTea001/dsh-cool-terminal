@@ -1,30 +1,32 @@
 /**
  * The common-commands dialog.
  *
- * Opens from the sidebar footer's 常用命令 button: a searchable list of saved
+ * Opens from the sidebar footer's Commands button: a searchable list of saved
  * shell snippets, each row inserting its command into the active console's
  * input (no newline — Enter runs it). Rows are outlined cards with
- * always-visible icon actions (编辑 / 复制 / 删除); copy success is reported
+ * always-visible icon actions (edit / copy / delete); copy success is reported
  * by a toast owned by the dialog, because the primitives export the
  * clipboard writer but keep their feedback hook private, and a Tooltip
  * bubble cannot guarantee to stay open across the async write.
  *
- * Adding and editing are inline: 添加命令 (a primary button next to the search
- * field) inserts a form card at the top of the list, and editing a row swaps
- * that row for the same form. The modal stays a single layer — the nested
- * dialog is gone — so the layer's Escape handler is intercepted in the
+ * Adding and editing are inline: Add command (a primary button next to the
+ * search field) inserts a form card at the top of the list, and editing a row
+ * swaps that row for the same form. The modal stays a single layer — the
+ * nested dialog is gone — so the layer's Escape handler is intercepted in the
  * capture phase while a form is open: Escape then cancels the form instead of
  * closing the whole dialog.
  *
- * The command list lives in the View's state (persisted by commands.ts); this
- * component is controlled: it renders what it is handed and reports changes
- * upward.
+ * The command list lives in the View's state (persisted by commands.ts) and
+ * the copy's language arrives as `t`, exactly as every other string this
+ * package renders: this component is controlled — it renders what it is handed
+ * and reports changes upward.
  */
 
 import * as React from 'react'
 import { Button, Input, Modal, Toast, Tooltip, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconCopy, IconEdit, IconPlus, IconTrash } from './icons.js'
 import { addCommand, filterCommands, removeCommand, updateCommand, type CommandDef } from './commands.js'
+import type { Translate } from './locales.js'
 
 const h = React.createElement
 
@@ -42,6 +44,8 @@ interface CommandsDialogProps {
   /** Whether the dialog is showing (owner-controlled). */
   open: boolean
   readonly commands: readonly CommandDef[]
+  /** Translator for every string this dialog renders. */
+  readonly t: Translate
   /** Whether an active console can receive text right now. */
   insertable: boolean
   /** Replace the whole list after an add, edit, or delete. */
@@ -58,6 +62,7 @@ interface CommandsDialogProps {
  */
 function CommandRow(props: {
   command: CommandDef
+  t: Translate
   /** False when no active console can receive text. */
   insertable: boolean
   onInsert: (body: string) => void
@@ -65,7 +70,7 @@ function CommandRow(props: {
   onCopy: () => void
   onRemove: (id: string) => void
 }): React.ReactElement {
-  const { command, insertable, onInsert, onEdit, onCopy, onRemove } = props
+  const { command, t, insertable, onInsert, onEdit, onCopy, onRemove } = props
   // Icon actions ride the shared `.dsh-ct-icon` seat inside a Tooltip bubble
   // (the bubble replaces the native title, so there is no double tooltip).
   // Copy feedback is the toast owned by the dialog, not the bubble: the
@@ -90,7 +95,7 @@ function CommandRow(props: {
   return h('div', {
     key: command.id,
     className: 'dsh-ct-cmd-row',
-    title: insertable ? '插入到当前终端' : '当前没有激活的终端',
+    title: insertable ? t('commands.insertHint') : t('commands.noActiveTerminal'),
     onClick: () => {
       onInsert(command.body)
     },
@@ -98,25 +103,26 @@ function CommandRow(props: {
     h('div', { key: 'main', className: 'dsh-ct-cmd-main' },
       h('span', { key: 'body', className: 'dsh-ct-cmd-body' }, command.body),
       command.description === ''
-        ? h('span', { key: 'desc', className: 'dsh-ct-cmd-desc dsh-ct-cmd-desc-none' }, '暂无描述')
+        ? h('span', { key: 'desc', className: 'dsh-ct-cmd-desc dsh-ct-cmd-desc-none' }, t('commands.noDescription'))
         : h('span', { key: 'desc', className: 'dsh-ct-cmd-desc' }, command.description),
     ),
     h('div', { key: 'actions', className: 'dsh-ct-cmd-actions' },
-      action('edit', '编辑', false, () => onEdit(command), h(IconEdit, { key: 'edit' })),
-      action('copy', '复制', false, () => onCopy(), h(IconCopy, { key: 'copy' })),
-      action('remove', '删除', true, () => onRemove(command.id), h(IconTrash, { key: 'remove' })),
+      action('edit', t('commands.edit'), false, () => onEdit(command), h(IconEdit, { key: 'edit' })),
+      action('copy', t('commands.copy'), false, () => onCopy(), h(IconCopy, { key: 'copy' })),
+      action('remove', t('commands.remove'), true, () => onRemove(command.id), h(IconTrash, { key: 'remove' })),
     ),
   )
 }
 
-/** The inline add/edit form: two inputs plus a right-aligned 取消 / 保存 row. */
+/** The inline add/edit form: two inputs plus a right-aligned cancel / save row. */
 function CommandForm(props: {
   editing: EditingState
+  t: Translate
   onChange: (next: EditingState) => void
   onCancel: () => void
   onSave: () => void
 }): React.ReactElement {
-  const { editing, onChange, onCancel, onSave } = props
+  const { editing, t, onChange, onCancel, onSave } = props
   const canSave = editing.body.trim() !== ''
   const commit = (): void => {
     if (canSave) onSave()
@@ -125,7 +131,7 @@ function CommandForm(props: {
     h(Input, {
       className: 'dsh-ct-cmd-input',
       value: editing.body,
-      placeholder: '命令，如 pnpm dev',
+      placeholder: t('commands.bodyPlaceholder'),
       autoFocus: true,
       spellCheck: false,
       onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,27 +144,27 @@ function CommandForm(props: {
     h(Input, {
       className: 'dsh-ct-cmd-input',
       value: editing.description,
-      placeholder: '描述（可选）',
+      placeholder: t('commands.descriptionPlaceholder'),
       spellCheck: false,
       onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
         onChange({ ...editing, description: event.target.value })
       },
     }),
     h('div', { key: 'actions', className: 'dsh-ct-cmd-edit-actions' },
-      h(Button, { key: 'cancel', variant: 'outline', onClick: onCancel }, '取消'),
+      h(Button, { key: 'cancel', variant: 'outline', onClick: onCancel }, t('commands.cancel')),
       h(Button, {
         key: 'save',
         variant: 'primary',
         disabled: !canSave,
         onClick: commit,
-      }, '保存'),
+      }, t('commands.save')),
     ),
   )
 }
 
 /** The controlled common-commands dialog; render it with `open` toggled by the footer button. */
 export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
-  const { open, commands, insertable, onChange, onClose, insert } = props
+  const { open, commands, t, insertable, onChange, onClose, insert } = props
   const [query, setQuery] = React.useState('')
   const [editing, setEditing] = React.useState<EditingState | null>(null)
   /** The copy toast plus a stamp for the React key, so a fresh copy restarts
@@ -216,7 +222,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
    */
   const onCopy = (body: string): void => {
     void writeClipboard(body).then((ok) => {
-      if (ok) setToast({ text: '已复制', stamp: Date.now() })
+      if (ok) setToast({ text: t('commands.copied'), stamp: Date.now() })
     })
   }
 
@@ -238,6 +244,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
       h(CommandForm, {
         key,
         editing,
+        t,
         onChange: setEditing,
         onCancel: () => setEditing(null),
         onSave: save,
@@ -249,6 +256,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
       return h(CommandRow, {
         key: command.id,
         command,
+        t,
         insertable,
         onInsert: (body) => {
           if (insert(body)) onClose()
@@ -264,7 +272,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
     }
     if (!adding && rows.length === 0) {
       return h('div', { key: 'empty', className: 'dsh-ct-cmd-empty' },
-        commands.length === 0 ? '暂无常用命令，点击「添加命令」创建' : '没有匹配的命令')
+        commands.length === 0 ? t('commands.empty') : t('commands.noMatch'))
     }
     // Fades are siblings of the scroller, never children of it: they are
     // pinned to the visible box so the list slides under them, and they paint
@@ -281,9 +289,9 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
     h(Modal, {
       open,
       onClose,
-      title: '常用命令',
-      closeLabel: '关闭',
-      description: '点击命令插入到当前终端，或使用行内操作管理。',
+      title: t('commands.title'),
+      closeLabel: t('commands.close'),
+      description: t('commands.description'),
       className: 'dsh-ct-cmd-dialog',
       contentClassName: 'dsh-ct-cmd-content',
       // The inline form owns Escape while it is open: cancel the form instead
@@ -300,8 +308,8 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
             key: 'search',
             className: 'dsh-ct-cmd-search',
             value: query,
-            placeholder: '搜索',
-            'aria-label': '搜索常用命令',
+            placeholder: t('commands.search'),
+            'aria-label': t('commands.searchLabel'),
             onChange: (event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.target.value),
           }),
           h(Button, {
@@ -309,7 +317,7 @@ export function CommandsDialog(props: CommandsDialogProps): React.ReactElement {
             variant: 'primary',
             icon: h(IconPlus, { key: 'plus' }),
             onClick: () => setEditing({ id: null, body: '', description: '' }),
-          }, '添加命令'),
+          }, t('commands.add')),
         ),
         renderList(),
       ],

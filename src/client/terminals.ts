@@ -72,8 +72,14 @@ export function withTerminalList(
   return { ...account, [key]: list }
 }
 
-/** The auto-generated title shape, with its slot number. */
-const AUTO_TITLE = /^Terminal (\d+)$/
+/**
+ * The auto-generated title shape, with its slot number.
+ *
+ * Both spellings count, because the language a console was created under is
+ * not the language it lives under: switching to Chinese and adding a console
+ * must not hand out a number an English-named console already holds.
+ */
+const AUTO_TITLE = /^(?:Terminal|终端) (\d+)$/
 
 /**
  * One past the highest number a group's auto-named consoles still hold.
@@ -97,14 +103,22 @@ function nextTerminalNumber(list: readonly TerminalDef[]): number {
 
 /**
  * Append a console named with the next free number.
+ *
+ * The title is minted by the caller, which owns the language: this module has
+ * no translator, and a console's name is user data once it has been written.
  * @param list - current group list.
  * @param key - group key.
+ * @param titleOf - the name for one auto-numbered console.
  * @returns the next group list.
  */
-export function addTerminal(list: readonly TerminalDef[], key: string): TerminalDef[] {
+export function addTerminal(
+  list: readonly TerminalDef[],
+  key: string,
+  titleOf: (number: number) => string = (number) => `Terminal ${number}`,
+): TerminalDef[] {
   sequence += 1
   const id = `${key}:t${Date.now().toString(36)}${sequence.toString(36)}`
-  return [...list, { id, title: `Terminal ${nextTerminalNumber(list)}` }]
+  return [...list, { id, title: titleOf(nextTerminalNumber(list)) }]
 }
 
 /**
@@ -166,21 +180,27 @@ export function moveTerminal(
   return next
 }
 
-/** Parse one persisted console entry, or undefined when it is malformed. */
-function parseTerminalDef(item: unknown): TerminalDef | undefined {
+/**
+ * Parse one persisted console entry, or undefined when it is malformed.
+ * @param item - one persisted entry.
+ * @param fallbackTitle - the name to repair a missing title with; the caller
+ *   owns the language, because this module has no translator.
+ */
+function parseTerminalDef(item: unknown, fallbackTitle: string): TerminalDef | undefined {
   if (item === null || typeof item !== 'object') return undefined
   const record = item as Record<string, unknown>
   if (typeof record.id !== 'string' || record.id === '') return undefined
-  const title = typeof record.title === 'string' && record.title !== '' ? record.title : 'Terminal'
+  const title = typeof record.title === 'string' && record.title !== '' ? record.title : fallbackTitle
   return { id: record.id, title }
 }
 
 /**
  * Read the persisted account, dropping anything that does not match the shape
  * (a hand-edited or older entry must not break the tab).
+ * @param fallbackTitle - the name a console with no title is repaired to.
  * @returns the validated account, or an empty one.
  */
-export function loadAccount(): TerminalAccount {
+export function loadAccount(fallbackTitle: string = 'Terminal'): TerminalAccount {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (raw === null) return {}
@@ -191,7 +211,7 @@ export function loadAccount(): TerminalAccount {
       if (!Array.isArray(value)) continue
       const list: TerminalDef[] = []
       for (const item of value) {
-        const terminal = parseTerminalDef(item)
+        const terminal = parseTerminalDef(item, fallbackTitle)
         if (terminal !== undefined) list.push(terminal)
       }
       // An empty list is kept as-is: it records "this group holds none",

@@ -137,7 +137,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
 
   /**
    * Attach a hover/focus tooltip to an anchor element. The `label` prop is
-   * read every render, so swapping it (e.g. to 已复制) updates an open bubble.
+   * read every render, so swapping it (e.g. a language switch) updates an open
+   * bubble.
    * @param props.label - bubble text.
    * @param props.side - placement relative to the anchor (default 'right').
    * @param props.delayMs - hover delay; keyboard focus stays immediate.
