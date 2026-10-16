@@ -1,7 +1,7 @@
 {
   "name": "dsh-cool-terminal",
-  "version": "0.4.1",
-  "description": "DeepSeek Harness terminal plugin — a real shell, a real working directory, persistent state, common-command management, and command completion.",
+  "version": "0.4.2",
+  "description": "DeepSeek Harness terminal plugin — a real shell, workspace sync, persistent state, common-command management, and command completion.",
   "type": "module",
   "license": "MIT",
   "author": "CoolTea",

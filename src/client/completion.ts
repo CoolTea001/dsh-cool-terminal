@@ -25,7 +25,11 @@
  * erases text the model actually accounts for; everything else degrades to
  * "no suggestions", never to a corrupted prompt. Full-screen applications are
  * excluded at capture time by their modes (application cursor keys — shells
- * never enable it) and by refusing an empty (column-0) prompt as an anchor.
+ * never enable it) and by refusing an empty (column-0) prompt as an anchor;
+ * everything else that is not a shell prompt is excluded from the outside, by
+ * the caller running this module only while the shell owns the terminal's
+ * foreground (see terminal.tsx), plus {@link interactivePrompt} for the
+ * questions a shell asks itself through a builtin like `read`.
  *
  * Everything here is pure and DOM-free: the caller reads the screen, steps the
  * model, and forwards bytes to the PTY (see terminal.tsx).
@@ -150,6 +154,25 @@ function isLiteralRun(text: string): boolean {
 }
 
 /**
+ * Anchor the model to the prompt under the caret: the prompt's width and
+ * spelling are read from the row (`0..cursorX`), and the empty model they
+ * belong to is trusted again.
+ */
+function capturePrompt(line: LineModel, screen: ScreenState): LineModel {
+  return {
+    ...line,
+    promptLen: screen.cursorX,
+    promptText: screen.row.slice(0, screen.cursorX),
+    trusted: true,
+  }
+}
+
+/** The model no longer matches the screen; the popup must close over it. */
+function distrust(line: LineModel): LineModel {
+  return { ...line, trusted: false }
+}
+
+/**
  * Verify (and where safe, repair) the model against what is on screen.
  *
  * Called once per keystroke *before* the keystroke is applied, so the screen
@@ -191,27 +214,22 @@ export function validateLine(line: LineModel, screen: ScreenState): LineModel {
   // A TUI can own the screen at any moment without a line reset of our own
   // (a program started from a dialog insert, say); its redraws are not a
   // prompt, so never trust one.
-  if (screen.appCursorKeys) return { ...line, trusted: false }
+  if (screen.appCursorKeys) return distrust(line)
   if (line.text === '' && line.promptLen === null) {
     // The first keystroke of a line (Enter reset the model, so no prompt has
     // been learned yet): the caret sits right after the prompt, which is
     // where the prompt's width and spelling are read. Column 0 is refused —
     // an empty prompt gives no anchor, and that is exactly where editors
     // like vim leave the caret.
-    if (screen.cursorX === 0) return { ...line, trusted: false }
-    return {
-      ...line,
-      promptLen: screen.cursorX,
-      promptText: screen.row.slice(0, screen.cursorX),
-      trusted: true,
-    }
+    if (screen.cursorX === 0) return distrust(line)
+    return capturePrompt(line, screen)
   }
   // Otherwise the checks below also cover an empty model with a known
   // prompt — the state a history recall leaves behind: the caret no longer
   // sits at `promptLen`, which sends it through the re-sync instead of a
   // re-capture that would swallow the recalled text into the anchor.
   const promptLen = line.promptLen
-  if (promptLen === null) return { ...line, trusted: false }
+  if (promptLen === null) return distrust(line)
   // The row prefix must still be the prompt we captured: a prompt that
   // changed (or a capture taken from mid-output, later overwritten by the
   // real prompt) invalidates every column arithmetic below. An empty line has
@@ -222,14 +240,9 @@ export function validateLine(line: LineModel, screen: ScreenState): LineModel {
   // popup.
   if (screen.row.slice(0, promptLen) !== line.promptText) {
     if (line.text === '' && screen.cursorX > 0 && screen.row.slice(screen.cursorX).trim() === '') {
-      return {
-        ...line,
-        promptLen: screen.cursorX,
-        promptText: screen.row.slice(0, screen.cursorX),
-        trusted: true,
-      }
+      return capturePrompt(line, screen)
     }
-    return { ...line, trusted: false }
+    return distrust(line)
   }
 
   // The caret's row starts with the captured prompt, so it *is* the prompt
@@ -259,8 +272,8 @@ export function validateLine(line: LineModel, screen: ScreenState): LineModel {
  * yields the editable text and never the prompt itself.
  */
 function resyncLine(line: LineModel, screen: ScreenState, promptLen: number): LineModel {
-  if (screen.cursorX < promptLen) return { ...line, trusted: false }
-  if (screen.row.slice(screen.cursorX).trim() !== '') return { ...line, trusted: false }
+  if (screen.cursorX < promptLen) return distrust(line)
+  if (screen.row.slice(screen.cursorX).trim() !== '') return distrust(line)
   const text = screen.row.slice(promptLen, screen.cursorX)
   return { ...line, text, cursor: text.length, trusted: true }
 }
@@ -442,8 +455,8 @@ export function matchCommands(commands: readonly CommandDef[], text: string): Co
   if (needle === '') return []
   const matches: CommandDef[] = []
   for (const command of commands) {
-    if (command.body.trim().toLowerCase() === needle) continue
     const body = command.body.toLowerCase()
+    if (body.trim() === needle) continue
     if (body.includes(needle) || command.description.toLowerCase().includes(needle)) {
       matches.push(command)
       if (matches.length >= MAX_ITEMS) break
@@ -452,9 +465,39 @@ export function matchCommands(commands: readonly CommandDef[], text: string): Co
   return matches
 }
 
+/**
+ * True when the text the caret sits behind is a *program's* question rather
+ * than a shell prompt.
+ *
+ * The popup exists for command lines. A question a running program asks —
+ * `[y/N]`, `(yes/no)`, `Continue?`, `Password:` — is not one, and a saved
+ * command filled into it would be typed into that program instead. The Host's
+ * foreground verdict already covers programs (see terminal.tsx), but it cannot
+ * see a question asked by the shell's own `read`/`select` builtin, and a Host
+ * that cannot inspect processes has no verdict to give at all; this reads the
+ * one thing every such case has in common, the anchor text itself.
+ *
+ * Deliberately narrow: that anchor is a shell prompt for every legitimate
+ * popup, so a pattern that fired on an ordinary prompt would switch completion
+ * off wholesale.
+ */
+function interactivePrompt(prompt: string): boolean {
+  const text = prompt.trimEnd()
+  if (text === '') return false
+  return (
+    // An answer list at the end of the line: `[y/N]`, `(y/n)`, `[Y]`, `（y/n）`.
+    /[\[(（]\s*[yYnN]\s*(?:\/\s*[yYnN]\s*)?[\])）]$/.test(text) ||
+    /\byes\s*\/\s*no\b/i.test(text) ||
+    /continue\?/i.test(text) ||
+    /(?:password|passphrase|passcode)\s*[:：]?$/i.test(text) ||
+    /(?:密码|口令|确认|继续)\s*[:：]?$/.test(text)
+  )
+}
+
 /** The popup for a line, or null when there is nothing to show. */
 function popupFor(commands: readonly CommandDef[], line: LineModel): PopupState | null {
   if (!line.trusted || line.text.trim() === '') return null
+  if (interactivePrompt(line.promptText)) return null
   const items = matchCommands(commands, line.text)
   return items.length === 0 ? null : { items, selected: 0 }
 }

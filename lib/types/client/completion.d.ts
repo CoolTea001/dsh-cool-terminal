@@ -25,7 +25,11 @@
  * erases text the model actually accounts for; everything else degrades to
  * "no suggestions", never to a corrupted prompt. Full-screen applications are
  * excluded at capture time by their modes (application cursor keys — shells
- * never enable it) and by refusing an empty (column-0) prompt as an anchor.
+ * never enable it) and by refusing an empty (column-0) prompt as an anchor;
+ * everything else that is not a shell prompt is excluded from the outside, by
+ * the caller running this module only while the shell owns the terminal's
+ * foreground (see terminal.tsx), plus {@link interactivePrompt} for the
+ * questions a shell asks itself through a builtin like `read`.
  *
  * Everything here is pure and DOM-free: the caller reads the screen, steps the
  * model, and forwards bytes to the PTY (see terminal.tsx).

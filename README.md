@@ -1,6 +1,6 @@
-# dsh-cool-terminal
-
 ![dsh-cool-terminal cover](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.4.0.png)
+
+# dsh-cool-terminal
 
 English · [中文](./README.zh.md)
 
@@ -8,7 +8,7 @@ English · [中文](./README.zh.md)
 
 ## Description
 
-DeepSeek Harness terminal plugin — a real shell, a real working directory, persistent state, common-command management, and command completion.
+DeepSeek Harness terminal plugin — a real shell, workspace sync, persistent state, common-command management, and command completion.
 
 ## Features
 

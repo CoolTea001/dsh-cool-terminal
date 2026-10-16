@@ -57,6 +57,37 @@ const KEEPALIVE_MS = 20_000
 const EXITED_TTL_MS = 5 * 60 * 1000
 
 /**
+ * How long a foreground watch keeps checking after a submitted line.
+ *
+ * A watch may only stop early once it has seen a command and then the shell
+ * again; this is the floor for the other outcome, a command that started and
+ * finished between two checks — and it is also what covers a shell whose
+ * `preexec` hooks run for a while before the command is forked, which would
+ * otherwise look idle immediately after Enter.
+ */
+const WATCH_MIN_MS = 2_000
+
+/**
+ * Backoff between foreground checks, milliseconds; the last entry repeats.
+ *
+ * The first checks are close together because the interesting transition (a
+ * program taking the terminal, or the prompt coming back) happens right after
+ * a line is submitted; the later ones only have to notice the prompt returning
+ * after a long build, where a second or two of delay costs nothing.
+ */
+const WATCH_BACKOFF_MS = [150, 300, 500, 800, 1_200, 2_000] as const
+
+/**
+ * How long one foreground probe may take before it counts as unreadable.
+ *
+ * Each probe drives the next one, so a provider call that never settles would
+ * strand the watch — and with it a browser whose gate is shut and has nothing
+ * left to reopen it. A timeout is just another unreadable answer, which is
+ * already the case every caller treats as "no verdict, change nothing".
+ */
+const WATCH_PROBE_TIMEOUT_MS = 1_000
+
+/**
  * Where the plugin keeps state that belongs to it rather than to a Workspace.
  *
  * A console's history is the tab's own bookkeeping, so it lives under the
@@ -113,6 +144,21 @@ interface PtySession {
   writes: Promise<void>
   keepalive: NodeJS.Timeout | undefined
   reap: NodeJS.Timeout | undefined
+  /**
+   * Last foreground verdict pushed to browsers: true while the shell itself
+   * owns the terminal (a command line is being typed), false while a command it
+   * started does, null before the first verdict. See
+   * {@link PtyRegistry.watchForeground}.
+   */
+  fgOpen: boolean | null
+  /** Watch generation; a check scheduled by a superseded watch stops. */
+  fgToken: number
+  fgTimer: NodeJS.Timeout | undefined
+  /** When the current watch started, and whether it has seen a command yet. */
+  fgStartedAt: number
+  fgBusySeen: boolean
+  /** Index into {@link WATCH_BACKOFF_MS} of the next check. */
+  fgStep: number
 }
 
 /** A terminal allocation: the session, or the refusal a route renders as JSON. */
@@ -120,6 +166,33 @@ type OpenOutcome = { session: PtySession } | { error: string; status: number }
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Await a provider probe, giving up on it after `ms` — and answering undefined
+ * then, exactly as a failed one does.
+ *
+ * Used for foreground probes, whose answers gate a browser's completion: a call
+ * that never settles must not be able to strand the watch that asked for it.
+ *
+ * @param work - the probe to bound.
+ * @param ms - how long it may take.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms)
+    timer.unref?.()
+    work.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(undefined)
+      },
+    )
+  })
 }
 
 function sendJson(res: any, status: number, body: unknown): void {
@@ -484,6 +557,23 @@ function sendEvent(res: any, event: string | undefined, data: unknown): void {
   res.write(`${head}data: ${JSON.stringify(data)}\n\n`)
 }
 
+/**
+ * Send one named event to several responses, skipping the ones that are gone.
+ *
+ * A browser whose socket died between two writes must not stop the others from
+ * being told — the foreground verdict in particular, since a client that never
+ * hears it keeps completion switched off.
+ */
+function sendEventTo(clients: Iterable<any>, event: string, data: unknown): void {
+  for (const client of clients) {
+    try {
+      if (!client.writableEnded) sendEvent(client, event, data)
+    } catch {
+      /* the client is gone; its own stream teardown drops it */
+    }
+  }
+}
+
 /** One chunked, base64-encoded output frame. */
 function sendOutput(res: any, bytes: Buffer): void {
   sendEvent(res, undefined, { d: bytes.toString('base64') })
@@ -536,6 +626,105 @@ class PtyRegistry {
     this.sessions.delete(session.id)
     if (session.key !== '' && this.byKey.get(session.key) === session.id) this.byKey.delete(session.key)
     this.cancelReap(session)
+    this.stopForegroundWatch(session)
+  }
+
+  /** Cancel a running foreground watch, if any. */
+  private stopForegroundWatch(session: PtySession): void {
+    session.fgToken += 1
+    if (session.fgTimer === undefined) return
+    clearTimeout(session.fgTimer)
+    session.fgTimer = undefined
+  }
+
+  /**
+   * Whether the shell itself owns the terminal's foreground, or null when this
+   * Host cannot tell.
+   *
+   * `inspectForeground()` reports the PTY's foreground process group, which is
+   * the shell's own group (`handle.pid`, since a PTY child starts as its own
+   * session leader) exactly while no command is running, and the command's
+   * group while one is. That is the difference between "the user is typing a
+   * command line", where completion belongs, and "a program is asking
+   * something" — a `y/n` confirmation, a password prompt, a REPL — where a
+   * popup would fill its suggestion into that program's input instead.
+   *
+   * Every failure (an unavailable inspector, an unresolvable group, a provider
+   * that does not implement the method) answers null: an unobservable terminal
+   * must never be mistaken for one with a command running, or completion would
+   * silently switch itself off.
+   */
+  private async shellOwnsTerminal(session: PtySession): Promise<boolean | null> {
+    if (session.exited !== null || session.pid <= 0) return null
+    try {
+      const probe: Promise<{ processGroupId?: number } | undefined> = session.handle.inspectForeground()
+      const foreground = await withTimeout(probe, WATCH_PROBE_TIMEOUT_MS)
+      const group = foreground?.processGroupId
+      if (typeof group !== 'number') return null
+      return group === session.pid
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Follow the terminal's foreground for a while, publishing every change.
+   *
+   * Started when a line is submitted (the moment a command may take over) and
+   * whenever a browser attaches (which may be mid-command, after a reload).
+   * The watch keeps its slowest cadence for as long as a command holds the
+   * foreground, because the return of the shell prompt is what ends the
+   * suppression on the browser side; it stops once the shell is back after a
+   * command was seen, once nobody is attached to tell, or — for a host that
+   * cannot observe the foreground at all — after {@link WATCH_MIN_MS} of
+   * questions with no answers. Its first verdict is published unconditionally,
+   * which is what opens a browser's gate again after a command that began and
+   * ended before the first check (see {@link checkForeground}).
+   */
+  watchForeground(session: PtySession): void {
+    this.stopForegroundWatch(session)
+    session.fgStartedAt = Date.now()
+    session.fgBusySeen = false
+    session.fgStep = 0
+    this.scheduleForegroundCheck(session, session.fgToken, WATCH_BACKOFF_MS[0])
+  }
+
+  private scheduleForegroundCheck(session: PtySession, token: number, delay: number): void {
+    session.fgTimer = setTimeout(() => {
+      session.fgTimer = undefined
+      void this.checkForeground(session, token)
+    }, delay)
+    session.fgTimer.unref?.()
+  }
+
+  private async checkForeground(session: PtySession, token: number): Promise<void> {
+    const owns = await this.shellOwnsTerminal(session)
+    // A superseded watch, a session that ended, or nobody left to tell: stop.
+    // The next attach starts a fresh watch.
+    if (token !== session.fgToken || session.exited !== null) return
+    if (session.clients.size === 0) return
+
+    // An unknown answer counts as "no verdict", which the browser reads as
+    // "completion stays available": the conservative direction for a signal we
+    // could not read is to change nothing.
+    //
+    // The first verdict of a watch is published even when it matches the last
+    // one, because the browser closes its own gate the moment it submits a
+    // line and only this frame opens it again — a command that started and
+    // finished between two checks never produces a `false` in between.
+    const open = owns !== false
+    if (session.fgStep === 0 || open !== session.fgOpen) {
+      session.fgOpen = open
+      sendEventTo(session.clients, 'foreground', { shell: open })
+    }
+
+    const elapsed = Date.now() - session.fgStartedAt
+    if (owns === false) session.fgBusySeen = true
+    else if (elapsed >= WATCH_MIN_MS) return
+    else if (session.fgBusySeen) return
+
+    if (session.fgStep < WATCH_BACKOFF_MS.length - 1) session.fgStep += 1
+    this.scheduleForegroundCheck(session, token, WATCH_BACKOFF_MS[session.fgStep])
   }
 
   /** Cancel a scheduled record reap, because something is about to read it. */
@@ -664,6 +853,12 @@ class PtyRegistry {
       writes: Promise.resolve(),
       keepalive: undefined,
       reap: undefined,
+      fgOpen: null,
+      fgToken: 0,
+      fgTimer: undefined,
+      fgStartedAt: 0,
+      fgBusySeen: false,
+      fgStep: 0,
     }
     this.sessions.set(id, session)
     if (key !== '') this.byKey.set(key, id)
@@ -737,10 +932,20 @@ class PtyRegistry {
     // unloads; the replay it keeps in the meantime stays bounded regardless.
     const detach = (): void => {
       session.clients.delete(res)
-      if (session.clients.size === 0) this.stopKeepalive(session)
+      if (session.clients.size === 0) {
+        this.stopKeepalive(session)
+        this.stopForegroundWatch(session)
+      }
     }
     res.on('close', detach)
     res.on('error', detach)
+
+    // Who owns the terminal's foreground is what decides whether the browser
+    // may offer completion (see `watchForeground`). Reuse the last verdict so a
+    // reloading page is right immediately — a program may still be asking
+    // something — and re-check, so the first verdict is never far behind.
+    if (session.fgOpen !== null) sendEventTo([res], 'foreground', { shell: session.fgOpen })
+    this.watchForeground(session)
   }
 
   private ensureKeepalive(session: PtySession): void {
@@ -760,9 +965,16 @@ class PtyRegistry {
     session.keepalive = undefined
   }
 
-  /** Queue a keystroke behind every earlier one so input order is preserved. */
+  /**
+   * Queue a keystroke behind every earlier one so input order is preserved.
+   *
+   * A payload carrying a line break is a submission: whatever it starts may
+   * take the terminal's foreground away from the shell, so a watch starts with
+   * it (every other keystroke can only be the shell editing its own line).
+   */
   write(session: PtySession, data: string): void {
     if (session.exited !== null) return
+    if (data.includes('\r') || data.includes('\n')) this.watchForeground(session)
     session.writes = session.writes
       .then(() => session.handle.write(data))
       .catch(() => undefined)
@@ -776,6 +988,7 @@ class PtyRegistry {
     if (session.exited !== null) return
     session.exited = exit
     this.stopKeepalive(session)
+    this.stopForegroundWatch(session)
     if (detail !== undefined) {
       const note = `\r\n\x1b[2m[终端结束: ${detail}]\x1b[0m\r\n`
       this.broadcast(session, Buffer.from(note, 'utf8'))

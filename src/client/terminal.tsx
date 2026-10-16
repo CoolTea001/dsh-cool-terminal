@@ -116,6 +116,27 @@ interface Runtime {
   errors: number
   /** Shadow input line plus any open completion popup (see completion.ts). */
   completion: CompletionSession
+  /**
+   * Whether the shell itself owns the terminal's foreground: true while a
+   * command line is being typed, false while a program the shell started (a
+   * `y/n` question, a password prompt, a REPL) is reading the terminal, null
+   * until the Host has said. Completion is only offered while this is not
+   * false — see `foreground` on the stream in `attachStream`.
+   */
+  foreground: boolean | null
+  /**
+   * True once this stream has delivered at least one `foreground` verdict, i.e.
+   * once the Host in this process speaks that protocol.
+   *
+   * The gate is closed optimistically the moment a line is submitted, because
+   * the program that line starts can ask its first question before the Host has
+   * finished looking. That gamble is only sound against a Host that answers:
+   * one that is too old to send verdicts (a page reloaded against a plugin
+   * whose Host half was never reloaded) would leave the gate shut for the rest
+   * of the session. Without a verdict seen, submitting does not close it and
+   * completion behaves exactly as it did before any of this existed.
+   */
+  foregroundKnown: boolean
 }
 
 /**
@@ -142,6 +163,15 @@ const SCROLLBACK = 5000
 
 /** Stop retrying a severed stream after this many consecutive failures. */
 const MAX_STREAM_ERRORS = 3
+
+/**
+ * A payload bound for the PTY that submits a line.
+ *
+ * Enter (`\r`), a paste carrying line breaks, and a `fillLine` body that
+ * happens to contain one all match; every other keystroke can only be the
+ * shell editing the line it already has.
+ */
+const SUBMITTED = /[\r\n]/
 
 /**
  * One sidebar row's vertical pitch: the 32px row box plus the 2px flex gap,
@@ -422,6 +452,34 @@ function describeExit(payload: { exitCode?: number | null; signal?: string | nul
   return '已结束'
 }
 
+/**
+ * Queue one payload for a console's PTY on its own write chain, so payloads
+ * land in the order they were produced — keystrokes, dialog inserts, and
+ * popup fills all share this path. A console with no PTY yet drops the
+ * payload, and a failed write is not retried: the caller has no error path to
+ * surface it on, and a dead shell is reported by its own stream.
+ */
+function queueInput(runtime: Runtime, payload: string): void {
+  const terminalId = runtime.terminalId
+  if (terminalId === undefined) return
+  // A payload carrying a line break submits what precedes it, so from here
+  // until the Host reports the shell in front again, whatever that line
+  // started may be reading the terminal — a `y/n` question, a password, a
+  // REPL. Closing the gate on the spot, rather than waiting for the next
+  // verdict from the Host, is what keeps a popup from appearing over the very
+  // prompt the user is about to answer.
+  //
+  // Only against a Host that has answered at least once: a Host that never
+  // sends a verdict has nothing to reopen the gate with, and a session whose
+  // completion died with its first command would be far worse than one that
+  // never suppressed anything (see `Runtime.foregroundKnown`).
+  if (runtime.foregroundKnown && SUBMITTED.test(payload)) runtime.foreground = false
+  runtime.writes = runtime.writes
+    .then(() => sendInput(terminalId, payload))
+    .then(() => undefined)
+    .catch(() => undefined)
+}
+
 /** The result of {@link createTerminalView}. */
 export interface TerminalViewHandle {
   /** The Conversation View component to register into `conversation.view`. */
@@ -465,6 +523,20 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
    */
   function bumpView(): void {
     viewContext?.bump()
+  }
+
+  /**
+   * Dismiss one console's completion popup and repaint it away.
+   *
+   * Called when the terminal stops belonging to the shell: a submitted line
+   * may have started a program, or the Host reported one already running. The
+   * dismissal is published through the mounted View *now*, never through a
+   * mount captured earlier (see {@link ViewContext}).
+   */
+  function closeCompletion(runtime: Runtime): void {
+    if (runtime.completion.popup === null) return
+    runtime.completion = { line: runtime.completion.line, popup: null }
+    viewContext?.publish(null)
   }
 
   /** Repaint every live console with the tokens in force right now. */
@@ -522,6 +594,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       writes: Promise.resolve(),
       errors: 0,
       completion: emptySession(),
+      foreground: null,
+      foregroundKnown: false,
     }
     // Every keystroke, including control characters such as Ctrl+C, goes to the
     // PTY verbatim; the shell echoes it, which is what puts the cursor inline
@@ -542,9 +616,16 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
       // mount that created this runtime would render nothing (see
       // `ViewContext`). No mounted View means no popup to show, so the
       // keystroke goes to the PTY exactly as it would with no commands.
+      //
+      // A console whose foreground a running program owns is skipped
+      // entirely: what is typed there is that program's answer — a `y/n`
+      // confirmation, a password, a REPL line — and a popup over it could
+      // fill a saved command into it. The Host reports that state (see
+      // `foreground` in `attachStream`); until it says otherwise, or when it
+      // cannot tell, completion behaves exactly as it always has.
       const context = viewContext
       const commands = context === undefined ? [] : context.commands()
-      if (context !== undefined && commands.length > 0) {
+      if (context !== undefined && commands.length > 0 && runtime.foreground !== false) {
         const screen = readScreen(term)
         if (screen !== null) {
           // Re-verify what was typed so far against the screen (completion.ts
@@ -561,10 +642,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
           out = stepped.forward
         }
       }
-      runtime.writes = runtime.writes
-        .then(() => sendInput(terminalId, out))
-        .then(() => undefined)
-        .catch(() => undefined)
+      // A submitted line closes the completion gate; see `queueInput`.
+      queueInput(runtime, out)
     })
     return runtime
   }
@@ -612,11 +691,37 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     }
     source.onopen = () => {
       runtime.errors = 0
+      // A fresh stream re-learns who owns the foreground: the frame below is
+      // what closes this gate again, and until it arrives completion stays
+      // available rather than staying off on a stale suppression. The Host
+      // sends its last verdict as the stream attaches, so this is a round trip,
+      // not a guess.
+      runtime.foreground = null
       if (runtime.status === 'lost') {
         setStatus(runtime, 'live')
         bumpView()
       }
     }
+    // Who owns the terminal's foreground: the Host reports it when a line is
+    // submitted (something may have taken over) and whenever it changes back.
+    // `shell: false` means a program the shell started is reading the
+    // terminal, so completion must not offer to fill anything into it; any
+    // other frame — or none at all, on a Host that cannot tell — leaves
+    // completion available exactly as it was.
+    source.addEventListener('foreground', (event: Event) => {
+      let shell = true
+      try {
+        shell = (JSON.parse((event as MessageEvent).data) as { shell?: unknown }).shell !== false
+      } catch {
+        /* a malformed frame leaves completion available */
+      }
+      // This Host speaks the protocol, so the optimistic close on submit is
+      // safe from here on: it will answer with the way back (see
+      // `Runtime.foregroundKnown`).
+      runtime.foregroundKnown = true
+      runtime.foreground = shell
+      if (!shell) closeCompletion(runtime)
+    })
     source.addEventListener('exit', (event: Event) => {
       let detail = '已结束'
       try {
@@ -976,12 +1081,8 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
     const insertCommand = (body: string): boolean => {
       if (activeId === undefined) return false
       const runtime = runtimes.get(activeId)
-      const terminalId = runtime?.terminalId
-      if (runtime === undefined || terminalId === undefined) return false
-      runtime.writes = runtime.writes
-        .then(() => sendInput(terminalId, body))
-        .then(() => undefined)
-        .catch(() => undefined)
+      if (runtime === undefined || runtime.terminalId === undefined) return false
+      queueInput(runtime, body)
       // The dialog closing restores focus to its opener (the footer button);
       // the deferred focus lands after that pass, back on the console that
       // just received the command.
@@ -998,14 +1099,10 @@ export function createTerminalView(bridge: WorkspaceBridge): TerminalViewHandle 
      */
     const acceptCompletion = (consoleId: string, body: string): boolean => {
       const runtime = runtimes.get(consoleId)
-      const terminalId = runtime?.terminalId
-      if (runtime === undefined || terminalId === undefined) return false
+      if (runtime === undefined || runtime.terminalId === undefined) return false
       const filled = fillLine(runtime.completion.line, body)
       runtime.completion = { line: filled.line, popup: null }
-      runtime.writes = runtime.writes
-        .then(() => sendInput(terminalId, filled.forward))
-        .then(() => undefined)
-        .catch(() => undefined)
+      queueInput(runtime, filled.forward)
       publish(null)
       runtime.term.focus()
       return true

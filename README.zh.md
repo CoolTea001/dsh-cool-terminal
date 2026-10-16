@@ -1,6 +1,6 @@
-# dsh-cool-terminal
-
 ![dsh-cool-terminal 封面](https://cdn.cooltea.top/dsh-cool-terminal/readme-cover-v0.4.0.png)
+
+# dsh-cool-terminal
 
 [English](./README.md) · 中文
 
@@ -8,7 +8,7 @@
 
 ## 描述
 
-DeepSeek Harness 终端插件 — 真 shell、真工作目录、状态常驻、常用命令管理、命令补全。
+DeepSeek Harness 终端插件 — 真 shell、工作区同步、状态常驻、常用命令管理、命令补全。
 
 ## 功能介绍
 
