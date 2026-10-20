@@ -382,6 +382,19 @@ function bodyStyle(): CSSStyleDeclaration | undefined {
  * the ANSI colors reuse the product's state tokens — the same mapping the
  * shipped HTML ANSI renderer applies — so themed output matches the rest of
  * the UI instead of forcing a fixed terminal palette.
+ *
+ * The background itself is deliberately transparent. The tab paints no surface
+ * (see styles.ts), so the terminal has to be a window too: a themed
+ * `bg-base` fill here would put an opaque slab back over the wallpaper for the
+ * whole console, defeating the transparent root and main pane. Text, cursor,
+ * and ANSI fills are still painted by xterm; only the empty cells are clear,
+ * which is exactly what lets a background image run behind the shell. The
+ * transparent background keeps the surface's RGB values rather than plain
+ * black, because xterm resolves reverse-video text by making the background
+ * opaque: with a white surface its inverted glyphs come out white, with a dark
+ * one dark, and either stays readable against the foreground-filled cell. The
+ * cursor's accent keeps the surface color for the same reason — that color is
+ * what makes the glyph under a block cursor readable.
  */
 function readTheme(): ITheme {
   const style = bodyStyle()
@@ -393,7 +406,7 @@ function readTheme(): ITheme {
     return value === '' ? fallback : value
   }
 
-  const background = token('--dsw-alias-bg-base', dark ? '#151517' : '#ffffff')
+  const surface = token('--dsw-alias-bg-base', dark ? '#151517' : '#ffffff')
   const foreground = token('--dsw-alias-label-primary', dark ? '#f9fafb' : '#1b1b1c')
   const selection = token(
     '--dsw-alias-interactive-bg-hover-accent',
@@ -401,10 +414,15 @@ function readTheme(): ITheme {
   )
 
   return {
-    background,
+    // Fully transparent: empty cells show the app canvas — or a theme's
+    // wallpaper layer when one is mounted. `allowTransparency` at construction
+    // is what makes xterm honour the alpha channel. The surface's RGB is kept
+    // (alpha zeroed) so xterm's reverse-video fallback, `opaque(background)`,
+    // still yields the surface colour instead of black.
+    background: tint(surface, 0),
     foreground,
     cursor: foreground,
-    cursorAccent: background,
+    cursorAccent: surface,
     selectionBackground: tint(selection, 0.35),
     // Keep ANSI black dark (see ANSI_LITERALS) so the dark-text-on-color badges
     // every build tool emits stay readable; white still follows the label so
@@ -592,6 +610,11 @@ export function createTerminalView(bridge: WorkspaceBridge, t: Translate): Termi
   function createRuntime(id: string): Runtime {
     ensureThemeObserver()
     const term = new Terminal({
+      // The theme's background is transparent so a wallpaper can run behind the
+      // shell; xterm only honours that alpha with this option enabled. It must
+      // be fixed here, before `open()` — changing it later needs a reopened
+      // terminal, which would cost this console its element and scrollback.
+      allowTransparency: true,
       cursorBlink: true,
       // The code font is fixed for this console's lifetime: the PTY's geometry
       // is settled at spawn, so a later font change would desynchronize the

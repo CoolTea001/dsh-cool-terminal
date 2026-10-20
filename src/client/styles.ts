@@ -21,10 +21,17 @@ declare const __DSH_CT_XTERM_CSS__: string
 const XTERM_CSS = typeof __DSH_CT_XTERM_CSS__ === 'string' ? __DSH_CT_XTERM_CSS__ : ''
 
 export const TERMINAL_CSS = [
+  // The tab paints no surface of its own: it is a window onto whatever the app
+  // has behind the View — the canvas colour, or a theme's wallpaper layer (the
+  // background-image feature clears the canvas and expects plugin surfaces to
+  // clear themselves). An opaque slab here would hide the image for the whole
+  // tab, so the root stays transparent and only the parts that need a surface
+  // of their own (the sidebar) paint one.
+  //
   // The shell inherits the app's UI font so the sidebar matches DSH's own
   // sidebar; the console itself is drawn by xterm from `--ds-font-family-code`
   // (see terminal.tsx `readCodeFont`), not from CSS, so it stays monospaced.
-  '.dsh-ct-root{display:flex;flex-direction:row;box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,sans-serif);font-size:12.5px;line-height:1.5}',
+  '.dsh-ct-root{display:flex;flex-direction:row;box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:hidden;background:transparent;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,sans-serif);font-size:12.5px;line-height:1.5}',
 
   // Sidebar
   '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
@@ -178,8 +185,14 @@ export const TERMINAL_CSS = [
   '.dsh-ct-cmd-input{height:36px}',
 
   // Console pane. There is no toolbar: the pane is the terminal, and the shell
-  // prints its own prompt (which already carries the directory).
-  '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base)}',
+  // prints its own prompt (which already carries the directory). No background
+  // either: xterm draws the terminal and is configured to paint transparently
+  // (terminal.tsx `readTheme`), so a wallpaper runs behind the text exactly as
+  // it does behind the trajectory view. The sidebar keeps its own token because
+  // it is a surface rather than a window — and a theme that clears the canvas
+  // clears that token inside this root too, so it goes transparent over the
+  // image without costing the dark palette its step.
+  '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:transparent}',
   // Every opened console keeps its element mounted and its xterm instance
   // alive; only the active one is visible, so switching Views keeps scrollback
   // and the shell's own state exactly where they were.
@@ -195,8 +208,10 @@ export const TERMINAL_CSS = [
   '.dsh-ct-screen .xterm .xterm-viewport{background:transparent!important;scrollbar-width:thin}',
   // xterm hardcodes black behind both the scrollbar track and the IME
   // composition box; repaint them from the theme so a light palette does not
-  // get a black slab while text is being composed.
-  '.dsh-ct-screen .xterm .composition-view{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}',
+  // get a black slab while text is being composed. The composition box is
+  // transparent like the rest of the screen: an opaque fill would flash a slab
+  // over a wallpaper for the whole time an IME candidate is open.
+  '.dsh-ct-screen .xterm .composition-view{background:transparent;color:var(--dsw-alias-label-primary)}',
 
   // Inline completion popup: anchored to the caret inside the active console's
   // screen wrapper (terminal.tsx `renderCompletion`). The width is fixed, so
