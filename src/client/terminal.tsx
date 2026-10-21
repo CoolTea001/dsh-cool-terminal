@@ -884,9 +884,8 @@ export function createTerminalView(bridge: WorkspaceBridge, t: Translate): Termi
      *  the very commit that closes the field. */
     const renamingRef = React.useRef<string | null>(null)
     renamingRef.current = renamingId
-    /** The scrollable console list, and the wrapper the edge fades are pinned
-     *  to (an absolutely positioned child of the scroller would scroll away
-     *  with the content, so the fades are siblings of the list). */
+    /** The scrollable console list, and the wrapper that carries the edge-fade
+     *  state (`data-fade-*`) and the scrollbar gutter the list's mask reads. */
     const listScroll = React.useRef<HTMLDivElement | null>(null)
     const listWrap = React.useRef<HTMLDivElement | null>(null)
     /** The common-commands dialog, and the commands it manages (persisted in
@@ -1084,15 +1083,17 @@ export function createTerminalView(bridge: WorkspaceBridge, t: Translate): Termi
      *
      * Scrolling fires far too often to push two booleans through `setVersion`,
      * so the answer is written straight onto the wrapper as `data-fade-top` /
-     * `data-fade-bottom` — no re-render, and nothing re-renders the rows. The
-     * effect deliberately has no dependency list: every content change (a group
-     * expanded, a console added, the Workspace list attaching) arrives as a
-     * commit, and re-running it is what re-reads the new heights; `scroll`
-     * covers the offset in between, `ResizeObserver` covers the box itself
-     * (window resize, the sidebar's first layout).
+     * `data-fade-bottom` — no re-render, and nothing re-renders the rows; the
+     * rules in styles.ts turn those attributes into the list's mask. The
+     * effect deliberately has no dependency list: every content change (a
+     * group expanded, a console added, the Workspace list attaching) arrives
+     * as a commit, and re-running it is what re-reads the new heights;
+     * `scroll` covers the offset in between, `ResizeObserver` covers the box
+     * itself (window resize, the sidebar's first layout).
      *
-     * The same pass records the scrollbar gutter in `--dsh-ct-fade-right`, so a
-     * fade covers the content column and never washes out the scrollbar.
+     * The same pass records the scrollbar gutter in `--dsh-ct-fade-right`, so
+     * the mask covers the content column and leaves a classic scrollbar
+     * untouched.
      */
     React.useEffect(() => {
       const scroll = listScroll.current
@@ -1442,12 +1443,10 @@ export function createTerminalView(bridge: WorkspaceBridge, t: Translate): Termi
           rows.length === 0
             ? h('div', { key: 'empty', className: 'dsh-ct-empty' }, t('sidebar.empty'))
             : rows.map((row) => renderGroup(row))),
-        // Siblings of the scroller, never children of it: they are pinned to
-        // the visible box so the list slides under them, and they paint over
-        // the rows only while the wrapper carries the matching data attribute
-        // (see the edge-fade effect above). Empty spans — no layout, no text.
-        h('span', { key: 'fade-top', className: 'dsh-ct-fade dsh-ct-fade-top', 'aria-hidden': 'true' }),
-        h('span', { key: 'fade-bottom', className: 'dsh-ct-fade dsh-ct-fade-bottom', 'aria-hidden': 'true' }),
+        // No fade elements: the edge fades are a mask on the scroller itself
+        // (styles.ts), so the rows dissolve into whatever is behind the View
+        // instead of into a painted band. The wrapper still carries the
+        // overflow state and the scrollbar gutter those rules read.
       ),
       // Footer seam: the sidebar splits into the scrolling workspace list on
       // top and a fixed quick-action bar below, so the list scrolls in place

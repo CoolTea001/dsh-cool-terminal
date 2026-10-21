@@ -25,41 +25,52 @@ export const TERMINAL_CSS = [
   // has behind the View — the canvas colour, or a theme's wallpaper layer (the
   // background-image feature clears the canvas and expects plugin surfaces to
   // clear themselves). An opaque slab here would hide the image for the whole
-  // tab, so the root stays transparent and only the parts that need a surface
-  // of their own (the sidebar) paint one.
+  // tab, so the root stays transparent and nothing inside it — sidebar
+  // included — puts a surface back.
   //
   // The shell inherits the app's UI font so the sidebar matches DSH's own
   // sidebar; the console itself is drawn by xterm from `--ds-font-family-code`
   // (see terminal.tsx `readCodeFont`), not from CSS, so it stays monospaced.
   '.dsh-ct-root{display:flex;flex-direction:row;box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:hidden;background:transparent;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,sans-serif);font-size:12.5px;line-height:1.5}',
 
-  // Sidebar
-  '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
-  // Edge fades: content dissolves into the sidebar's own surface at whichever
-  // end hides more list, so the eye can tell there is something above/below
-  // the fold without a dark band sitting on top of the rows.
+  // Sidebar. A window too, not a surface: the column paints no background of
+  // its own, so it rests on whatever is behind the View — the canvas colour,
+  // or a theme's wallpaper layer — exactly like the console beside it. In the
+  // light palette that changes nothing (layer-1 and bg-base are both #fff); in
+  // the dark one layer-1 (#232324) sat a visible step above the canvas
+  // (#151517), and presets can move either, so the column stops competing with
+  // the background it is laid on. The hairline seam is what still separates the
+  // two halves of the tab.
+  '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l1);background:transparent}',
+  // Edge fades: rows dissolve at whichever end hides more list, so the eye can
+  // tell there is something above/below the fold.
   //
-  // The scroll box is wrapped rather than being the positioned element itself:
-  // an absolutely positioned child of the scroller scrolls away with the
-  // content, so the fades have to be siblings of the list, pinned to the
-  // wrapper's box, and painted after it — they cover the rows (a background on
-  // the scroller could not: it paints underneath the content).
+  // This used to be a veil painted over the scroller in the sidebar's own
+  // surface colour. That only works while the column *is* a surface: over the
+  // canvas — and over a wallpaper — such a veil is a coloured band sitting on
+  // the list instead of dissolving it. So the fade is a mask on the scroller
+  // itself: rows lose alpha toward the edge and whatever is behind them shows
+  // through, the same way the console is a window. `mask-image` is not
+  // interpolatable between two gradients, so the switch is instant rather than
+  // the old 0.15s opacity easing; it is tied to real overflow, so it only ever
+  // changes when the user scrolls past an edge.
   //
-  //   - `pointer-events:none` keeps scrolling, row clicks, and drag-and-drop
-  //     working where a fade covers a row.
-  //   - `opacity` is driven by `data-fade-top` / `data-fade-bottom`, written
-  //     straight to the DOM by the edge-fade effect in terminal.tsx, so a fade
-  //     only appears while that side really has hidden content: a list short
-  //     enough to fit does not fade its first row into a grey smudge.
-  //   - `--dsh-ct-fade-right` is the scrollbar gutter, set by the same effect,
-  //     so the fade covers the content column and leaves the scrollbar alone.
+  //   - `mask-size` stops at the scrollbar gutter (`--dsh-ct-fade-right`, set
+  //     by the edge-fade effect in terminal.tsx) so a classic scrollbar never
+  //     fades out; `mask-repeat:no-repeat` keeps the gradient anchored left.
+  //   - `#000` is the opaque mask and `#0000` its clear end — the shorthand the
+  //     shipped sidebar uses for its own label mask.
+  //   - `data-fade-top` / `data-fade-bottom` are written straight to the DOM by
+  //     the edge-fade effect, so a list short enough to fit keeps an unmasked
+  //     first row instead of fading into nothing.
+  //
+  // The wrapper stays: it carries those attributes and the gutter variable,
+  // neither of which belongs on the scroller's own style.
   '.dsh-ct-side-list-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}',
-  '.dsh-ct-side-list{flex:1;min-height:0;overflow:auto;padding:8px 6px 10px}',
-  '.dsh-ct-fade{position:absolute;left:0;right:var(--dsh-ct-fade-right,0);height:28px;pointer-events:none;opacity:0;transition:opacity .15s ease;z-index:2}',
-  '.dsh-ct-fade-top{top:0;background:linear-gradient(to bottom,var(--dsw-alias-bg-layer-1),rgba(0,0,0,0))}',
-  '.dsh-ct-fade-bottom{bottom:0;background:linear-gradient(to top,var(--dsw-alias-bg-layer-1),rgba(0,0,0,0))}',
-  '[data-fade-top] .dsh-ct-fade-top{opacity:1}',
-  '[data-fade-bottom] .dsh-ct-fade-bottom{opacity:1}',
+  '.dsh-ct-side-list{flex:1;min-height:0;overflow:auto;padding:8px 6px 10px;mask-image:none;mask-repeat:no-repeat;mask-position:0 0;mask-size:calc(100% - var(--dsh-ct-fade-right,0px)) 100%}',
+  '[data-fade-top] .dsh-ct-side-list{mask-image:linear-gradient(to bottom,#0000,#000 28px)}',
+  '[data-fade-bottom] .dsh-ct-side-list{mask-image:linear-gradient(to top,#0000,#000 28px)}',
+  '[data-fade-top][data-fade-bottom] .dsh-ct-side-list{mask-image:linear-gradient(to bottom,#0000,#000 28px,#000 calc(100% - 28px),#0000)}',
   '.dsh-ct-empty{padding:16px 12px;color:var(--dsw-alias-label-tertiary);font-size:11px;text-align:center}',
 
   // Sidebar footer: the fixed bar under the scrolling workspace list. A
@@ -144,13 +155,14 @@ export const TERMINAL_CSS = [
   // would scroll away with the content).
   '.dsh-ct-cmd-list-wrap{position:relative;display:flex;flex-direction:column;min-height:0}',
   '.dsh-ct-cmd-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;padding:8px 2px 8px 0;max-height:min(46vh,380px);overflow:auto}',
-  // Edge fades, the same rhythm as the terminal sidebar: a gradient that
-  // dissolves rows into the dialog card's own surface (layer-2 is the Modal
-  // card background), shown only while that edge actually hides content.
-  // `--dsh-ct-fade-right` is the scrollbar gutter set by the edge-fade
-  // effect, so a fade covers the content column and never washes out the
-  // scrollbar. `pointer-events:none` keeps scrolling and row clicks working
-  // where a fade covers a row.
+  // Edge fades, the same rhythm as the terminal sidebar but a veil rather than
+  // a mask: this list sits on the dialog card's own opaque surface (layer-2 is
+  // the Modal card background), so a gradient towards that surface is exactly
+  // what "the rows dissolve into the card" looks like. Shown only while that
+  // edge actually hides content. `--dsh-ct-fade-right` is the scrollbar gutter
+  // set by the edge-fade effect, so a fade covers the content column and never
+  // washes out the scrollbar. `pointer-events:none` keeps scrolling and row
+  // clicks working where a fade covers a row.
   '.dsh-ct-cmd-fade{position:absolute;left:0;right:var(--dsh-ct-fade-right,0);height:32px;pointer-events:none;opacity:0;transition:opacity .15s ease;z-index:2}',
   '.dsh-ct-cmd-fade-top{top:0;background:linear-gradient(to bottom,var(--dsw-alias-bg-layer-2),rgba(0,0,0,0))}',
   '.dsh-ct-cmd-fade-bottom{bottom:0;background:linear-gradient(to top,var(--dsw-alias-bg-layer-2),rgba(0,0,0,0))}',
@@ -188,10 +200,7 @@ export const TERMINAL_CSS = [
   // prints its own prompt (which already carries the directory). No background
   // either: xterm draws the terminal and is configured to paint transparently
   // (terminal.tsx `readTheme`), so a wallpaper runs behind the text exactly as
-  // it does behind the trajectory view. The sidebar keeps its own token because
-  // it is a surface rather than a window — and a theme that clears the canvas
-  // clears that token inside this root too, so it goes transparent over the
-  // image without costing the dark palette its step.
+  // it does behind the trajectory view and behind the sidebar beside it.
   '.dsh-ct-main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:transparent}',
   // Every opened console keeps its element mounted and its xterm instance
   // alive; only the active one is visible, so switching Views keeps scrollback
