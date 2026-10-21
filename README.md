@@ -17,17 +17,10 @@ DeepSeek Harness terminal plugin — a real shell, workspace sync, persistent st
 - **Per-console command history** — Each console keeps its own history; pressing `↑` never pulls in commands from other consoles.
 - **Common command management** — Add, edit, delete, and use the common commands you create.
 - **Inline command completion** — Typing in a console pops matching common commands up under the caret; hovering a row or pressing `↑`/`↓` selects one, and `Enter` fills it into the command line without running it.
-- **Bilingual (English / Chinese)** — Every string the plugin renders follows DSH's language setting and switches live, with new console names minted in the language on screen.
 
 ## Installation
 
 Use DSH's add-plugin feature and enter the package name: `dsh-cool-terminal`.
-
-## Current limitations
-
-- Consoles run a real local shell as the DSH process user — this is not the confined one-shot shell, so treat them as a localhost-trusted environment.
-- Consoles are process-local and do not survive a DSH restart.
-- A console's size is fixed at creation; resizing is not supported yet.
 
 ## Contributing
 

@@ -1,10 +1,12 @@
 # AGENTS.zh.md
 
-## 提交与推送规则
+## commit & push 规则
 
-1. 禁止主动 commit 和 push —— 只有用户明确要求时才执行 `git commit` / `git push`。先汇报改动，由用户决定何时提交或推送。
-2. commit 前检查是否包含临时文件、大文件、敏感内容（密钥、token、.env）。
-3. commit message 使用英文生成。
+1. 未经允许，禁止主动执行 git commit 和 git push
+
+## README 规则
+
+1. 未经允许，禁止主动更新 README（`README.md` / `README.zh.md`）。
 
 ## 文档语言
 
