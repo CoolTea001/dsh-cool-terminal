@@ -41,7 +41,7 @@ export const TERMINAL_CSS = [
   // (#151517), and presets can move either, so the column stops competing with
   // the background it is laid on. The hairline seam is what still separates the
   // two halves of the tab.
-  '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l1);background:transparent}',
+  '.dsh-ct-side{flex:none;display:flex;flex-direction:column;min-height:0;width:256px;box-sizing:border-box;border-right:.5px solid var(--dsw-alias-border-l3);background:transparent}',
   // Edge fades: rows dissolve at whichever end hides more list, so the eye can
   // tell there is something above/below the fold.
   //
